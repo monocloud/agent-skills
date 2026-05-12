@@ -1,0 +1,46 @@
+{
+  "name": "monocloud-agent-skills",
+  "metadata": {
+    "description": "Agent skills for integrating MonoCloud authentication and management into any application, framework, or platform."
+  },
+  "owner": {
+    "name": "MonoCloud",
+    "email": "support@monocloud.com"
+  },
+  "plugins": [
+    {
+      "name": "monocloud",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/monocloud/agent-skills.git",
+        "path": "plugins/monocloud"
+      },
+      "description": "MonoCloud skills for authentication and Management API integrations across Next.js, Express, Fastify, JavaScript, and .NET.",
+      "version": "0.1.0",
+      "repository": "https://github.com/monocloud/agent-skills.git",
+      "license": "MIT",
+      "author": {
+        "name": "MonoCloud",
+        "email": "support@monocloud.com"
+      },
+      "keywords": [
+        "monocloud",
+        "authentication",
+        "oidc",
+        "oauth2",
+        "management",
+        "sdk",
+        "nextjs",
+        "express",
+        "fastify",
+        "node",
+        "dotnet",
+        "aspnetcore",
+        "jwt",
+        "api-key",
+        "introspection"
+      ],
+      "category": "authentication"
+    }
+  ]
+}
