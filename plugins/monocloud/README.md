@@ -12,6 +12,7 @@ It ships as a native plugin for both **Claude Code** (via [`.claude-plugin/plugi
 | `monocloud-auth-nextjs` | Sign-in / sessions / route protection / components / hooks for Next.js | `@monocloud/auth-nextjs` |
 | `monocloud-auth-express` | JWT / introspection token validation, scope + group enforcement | `@monocloud/backend-node/express` |
 | `monocloud-auth-fastify` | Same engine as above, via a Fastify `onRequest` hook | `@monocloud/backend-node/fastify` |
+| `monocloud-web-js` | Browser SDK for vanilla JS / TS SPAs — redirect/popup/silent flows, sessions, pluggable storage | `@monocloud/auth-web-js` |
 | `monocloud-management-js` | Programmatic  API access for Node.js | `@monocloud/management` |
 | `monocloud-management-dotnet` | Programmatic  API access for C# with .NET DI registration | `MonoCloud.Management` |
 

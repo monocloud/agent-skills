@@ -47,6 +47,7 @@ let skill = null;
 
 // Highest-confidence signals: an existing MonoCloud package.
 if (deps['@monocloud/auth-nextjs']) { skill = 'monocloud-auth-nextjs'; note('package.json declares @monocloud/auth-nextjs'); }
+else if (deps['@monocloud/auth-web-js']) { skill = 'monocloud-web-js'; note('package.json declares @monocloud/auth-web-js'); }
 else if (deps['@monocloud/management']) { skill = 'monocloud-management-js'; note('package.json declares @monocloud/management'); }
 else if (deps['@monocloud/backend-node'] && deps.fastify && !deps.express) { skill = 'monocloud-auth-fastify'; note('@monocloud/backend-node + fastify detected'); }
 else if (deps['@monocloud/backend-node'] && deps.express) { skill = 'monocloud-auth-express'; note('@monocloud/backend-node + express detected'); }
@@ -54,6 +55,17 @@ else if (deps['@monocloud/backend-node'] && deps.express) { skill = 'monocloud-a
 else if (deps.next) { skill = 'monocloud-auth-nextjs'; note('Next.js detected via "next" dep'); }
 else if (deps.fastify && !deps.express) { skill = 'monocloud-auth-fastify'; note('Fastify detected via "fastify" dep'); }
 else if (deps.express) { skill = 'monocloud-auth-express'; note('Express detected via "express" dep'); }
+// Vanilla browser SPA: a frontend bundler is present but no server framework and no React/Vue/Angular/Svelte SDK story.
+else if (
+  pkg &&
+  (deps.vite || deps.parcel || deps.webpack || deps.rollup || deps.esbuild || deps['@rspack/core']) &&
+  !deps.next && !deps.express && !deps.fastify &&
+  !deps['@angular/core']
+) {
+  skill = 'monocloud-web-js';
+  const bundler = ['vite', 'parcel', 'webpack', 'rollup', 'esbuild', '@rspack/core'].find((b) => deps[b]);
+  note(`Browser bundler detected (${bundler}) with no server framework — likely a vanilla SPA`);
+}
 
 // .NET signals.
 const csprojs = listFiles(ROOT, '.csproj', 3);
