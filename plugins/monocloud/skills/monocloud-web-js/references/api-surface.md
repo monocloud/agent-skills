@@ -135,11 +135,11 @@ interface MonoCloudWebJSClientOptions {
   // Identity (required)
   tenantDomain: string;          // e.g. "https://acme.us.monocloud.com"
   clientId: string;
-  appUrl: string;                // e.g. "https://example.com"
 
-  // Routes
+  // Routes / origin
+  appUrl?: string;               // default: window.location.origin — used for redirect URIs + cross-origin postMessage validation
   callbackPath?: string;         // default "/"
-  signOutCallbackPath?: string;  // default "/"
+  signOutPath?: string;          // default "/"
 
   // Behavior toggles
   validateIdToken?: boolean;     // default true
@@ -148,8 +148,8 @@ interface MonoCloudWebJSClientOptions {
 
   // Time-based settings (seconds)
   authWindowTimeout?: number;    // default 600
-  clockSkew?: number;            // default 60
-  clockTolerance?: number;       // default 60
+  clockSkew?: number;            // default 0 (was 60 in <0.1.2); applied to all time-based claim validations
+  clockTolerance?: number;       // default 60; additional tolerance for ALL time-based ID-token claims (exp / nbf / auth_time + maxAge)
 
   // Popup dimensions (pixels)
   popupWindowWidth?: number;     // default 375
@@ -157,6 +157,7 @@ interface MonoCloudWebJSClientOptions {
 
   // ID token / claims
   filteredIdTokenClaims?: string[]; // default: protocol claims
+  idTokenSigningAlgorithm?: SecurityAlgorithms; // default 'RS256' — also selects the SHA digest used to verify at_hash / s_hash in implicit flows; applies to public SPAs, not just confidential clients
 
   // Authorization defaults (per-request overrides win)
   defaultAuthParams?: DefaultAuthParams;
@@ -165,7 +166,6 @@ interface MonoCloudWebJSClientOptions {
   // Confidential-client extras (DO NOT use in a normal SPA)
   clientSecret?: string | Jwk;
   clientAuthMethod?: ClientAuthMethod;
-  idTokenSigningAlgorithm?: SecurityAlgorithms;
 
   // Caching (seconds)
   jwksCacheDuration?: number;
@@ -408,6 +408,15 @@ No status-code field. Use `instanceof` to branch; for `MonoCloudOPError`, also b
 
 For normal SPAs, stick with the default — it is the most secure and avoids the front-channel-fragment validation gaps noted in `defaultAuthParams` above.
 
+### Implicit-flow `at_hash` / `s_hash` validation
+
+When `validateIdToken` is `true` (the default) and an implicit-flow response type is used, `processCallback()` runs two additional ID-token integrity checks against the front-channel response:
+
+- **`at_hash`** — required for `responseType: 'id_token token'`. The SDK hashes the front-channel `access_token` using the digest implied by `idTokenSigningAlgorithm` (default `'RS256'` → SHA-256, `'RS384'` → SHA-384, etc.) and compares the result against the ID token's `at_hash` claim. Mismatch or absence throws `MonoCloudValidationError("Invalid 'at_hash' in id token")`.
+- **`s_hash`** — when an `s_hash` claim is present on the ID token in any implicit flow, the SDK compares it against the persisted callback `state`. Mismatch throws `MonoCloudValidationError("Invalid 's_hash' in id token")`.
+
+This is why `idTokenSigningAlgorithm` matters even for **public SPAs**: it controls which SHA digest the implicit-flow hash validators use, not just confidential-client signature verification.
+
 ## What this SDK does **not** do
 
 - It is browser-only. There are no Node entry points; the constructor references `window`, `document`, `history`, and `navigator`.
@@ -419,14 +428,16 @@ For normal SPAs, stick with the default — it is the most secure and avoids the
 
 | Setting               | Default                                            |
 | --------------------- | -------------------------------------------------- |
+| `appUrl`              | `window.location.origin`                           |
 | `storage`             | `new LocalStorage()`                               |
-| `callbackPath` / `signOutCallbackPath` | `"/"`                              |
+| `callbackPath` / `signOutPath` | `"/"`                                     |
 | `validateIdToken`     | `true`                                             |
 | `fetchUserinfo`       | `true`                                             |
 | `federatedSignOut`    | `true`                                             |
 | `authWindowTimeout`   | `600` (sec)                                        |
-| `clockSkew`           | `60` (sec)                                         |
-| `clockTolerance`      | `60` (sec)                                         |
+| `clockSkew`           | `0` (sec) — was `60` in <0.1.2                     |
+| `clockTolerance`      | `60` (sec) — applies to all time-based ID-token claims (`exp`, `nbf`, `auth_time + maxAge`) |
+| `idTokenSigningAlgorithm` | `'RS256'` — also selects the SHA digest for `at_hash` / `s_hash` |
 | `popupWindowWidth`    | `375`                                              |
 | `popupWindowHeight`   | `600`                                              |
 | `defaultAuthParams.responseType` | `'code'`                                |

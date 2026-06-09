@@ -34,7 +34,7 @@ No environment variables. **All configuration is passed to the constructor**.
 The client in your MonoCloud tenant must be configured as a **Single Page Application** with:
 
 - **Allowed Callback URLs:** the full URL matching `appUrl + callbackPath` (e.g. `http://localhost:5173/callback`).
-- **Allowed Sign-out URLs:** the full URL matching `appUrl + signOutCallbackPath` (e.g. `http://localhost:5173/logout`).
+- **Allowed Sign-out URLs:** the full URL matching `appUrl + signOutPath` (e.g. `http://localhost:5173/logout`).
 - **Allowed Origins (CORS):** the bare origin of `appUrl` (e.g. `http://localhost:5173`).
 - **Scopes:** at minimum `openid`, `profile`, `email`. Add `offline_access` if you want refresh tokens.
 
@@ -53,7 +53,7 @@ export const client = new MonoCloudWebJSClient({
   clientId: '<your-client-id>',
   appUrl: 'http://localhost:5173',
   callbackPath: '/callback',
-  signOutCallbackPath: '/logout',
+  signOutPath: '/logout',
   defaultAuthParams: {
     scopes: 'openid profile email offline_access', // offline_access => refresh tokens
   },
@@ -102,14 +102,14 @@ Required:
 | -------------- | -------------------------------------------------------------------------------------- |
 | `tenantDomain` | Your MonoCloud tenant URL, e.g. `https://acme.us.monocloud.com`                        |
 | `clientId`     | OIDC client id (SPA application registered in the dashboard)                           |
-| `appUrl`       | Public origin of the app, e.g. `http://localhost:5173`. Used to build redirect URIs and to validate cross-origin postMessages from popups / iframes. |
 
 Common optional:
 
 | Option                | Default                  | Purpose                                                                                          |
 | --------------------- | ------------------------ | ------------------------------------------------------------------------------------------------ |
+| `appUrl`              | `window.location.origin` | Public origin of the app, e.g. `http://localhost:5173`. Used to build redirect URIs and to validate cross-origin postMessages from popups / iframes. Provide it explicitly if the app is served from multiple origins or behind a reverse proxy where `window.location.origin` does not match the registered callback. |
 | `callbackPath`        | `/`                      | Relative path where MonoCloud redirects after sign-in. Must be in **Allowed Callback URLs**.     |
-| `signOutCallbackPath` | `/`                      | Relative path where MonoCloud redirects after sign-out. Must be in **Allowed Sign-out URLs**.    |
+| `signOutPath`         | `/`                      | Relative path where MonoCloud redirects after sign-out. Must be in **Allowed Sign-out URLs**.    |
 | `defaultAuthParams`   | —                        | Pre-set `scopes` / `resource` / `responseType` / `prompt` etc. for every auth request.           |
 | `resources`           | —                        | Additional `Indicator[]` (resource + scopes) requestable via `getTokens()`.                      |
 | `storage`             | `new LocalStorage()`     | Session persistence — `LocalStorage`, `SessionStorage`, `MemoryStorage`, or your own `IStorage`. |
@@ -121,8 +121,9 @@ Common optional:
 | `authWindowTimeout`   | `600` (sec)              | Timeout for popup / iframe auth windows.                                                          |
 | `popupWindowWidth`    | `375`                    | Popup width in pixels.                                                                            |
 | `popupWindowHeight`   | `600`                    | Popup height in pixels.                                                                           |
-| `clockSkew`           | `60` (sec)               | Clock skew tolerated for ID token `iat`/`exp`.                                                    |
-| `clockTolerance`      | `60` (sec)               | Clock tolerance for `nbf` / `auth_time`.                                                          |
+| `clockSkew`           | `0` (sec)                | Maximum allowed clock skew, applied to all time-based ID-token claim validations. Must be `>= 0`. |
+| `clockTolerance`      | `60` (sec)               | Additional tolerance applied to all time-based ID-token claim validations (`exp`, `nbf`, `auth_time + maxAge`) — not just `nbf`/`auth_time`. Must be `>= 0`. |
+| `idTokenSigningAlgorithm` | `'RS256'`            | Expected signing algorithm for ID-token validation. Also selects the SHA digest used for `at_hash` / `s_hash` checks in implicit flows — so it applies to **public SPAs**, not just confidential clients. |
 | `sessionKey`          | —                        | Extra suffix on the internal storage key. Use when you need multiple `MonoCloudWebJSClient` instances with the same `clientId` in the same tab. |
 | `filteredIdTokenClaims` | protocol claims set     | Override the list of claims stripped from the user object.                                        |
 | `clientSecret`, `clientAuthMethod` | — | Confidential-client extras. **Do not use in a normal SPA** — secrets cannot be safely shipped to a browser. |
@@ -137,7 +138,7 @@ Pre-configurable subset of authorization params (via `defaultAuthParams`): `scop
 await client.processCallback();
 ```
 
-Do **not** dispatch on the route yourself — the SDK matches the URL against `appUrl + callbackPath` / `appUrl + signOutCallbackPath` internally and knows which side of the flow it is on. There is no need to mount a special "callback" page or route component — the same entrypoint works for every page.
+Do **not** dispatch on the route yourself — the SDK matches the URL against `appUrl + callbackPath` / `appUrl + signOutPath` internally and knows which side of the flow it is on. There is no need to mount a special "callback" page or route component — the same entrypoint works for every page.
 
 If the app is loaded inside a popup or iframe (because the SDK opened it), `processCallback()` forwards the callback URL back to the main window via `postMessage` and returns; the main window's pending `signIn()` / `signOut()` promise resolves there.
 
@@ -193,7 +194,7 @@ await client.signOut({ federatedSignOut: false });            // local-only — 
 await client.signOut({ postLogoutRedirectUri: 'https://example.com/bye' });
 ```
 
-When `federatedSignOut` is `true` (the default) the SDK sends the user to MonoCloud's end-session endpoint, then back to `signOutCallbackPath`. When `false` the local session is cleared without contacting MonoCloud — useful when you want to log the user out of this app while leaving any other apps signed in.
+When `federatedSignOut` is `true` (the default) the SDK sends the user to MonoCloud's end-session endpoint, then back to `signOutPath`. When `false` the local session is cleared without contacting MonoCloud — useful when you want to log the user out of this app while leaving any other apps signed in.
 
 ## Reading tokens
 
@@ -300,7 +301,7 @@ All errors extend `MonoCloudAuthBaseError` (which extends `Error`). Use `instanc
 | Class                       | Thrown for                                                                     |
 | --------------------------- | ------------------------------------------------------------------------------ |
 | `MonoCloudOPError`          | OAuth/OIDC error from the authorization server. Exposes `.error` (code) and `.errorDescription`. Examples: `login_required`, `interaction_required`, `access_denied`, `invalid_grant`. |
-| `MonoCloudValidationError`  | Bad state — no session when one is required, missing parameters in a callback, scopes/response_type mismatch. |
+| `MonoCloudValidationError`  | Bad state — no session when one is required, missing parameters in a callback, scopes/response_type mismatch. Also thrown by `processCallback()` in implicit flows on hash validation failures: `Invalid 'at_hash' in id token` (when `responseType` is `'id_token token'` and the SDK can compute `at_hash` from the access token but the id token's claim does not match) and `Invalid 's_hash' in id token` (any implicit flow where the id token's `s_hash` does not match the callback state). |
 | `MonoCloudTokenError`       | Token operation failed (e.g. validation of an ID token).                       |
 | `MonoCloudHttpError`        | Network / unexpected HTTP response talking to MonoCloud.                       |
 | `MonoCloudJsError`          | Browser-environment failure (popup blocked, iframe in cross-origin-isolated context, window timeout, redirect attempted from inside an iframe, etc.). |
@@ -350,7 +351,7 @@ For different `clientId`s, this is unnecessary — the SDK already namespaces by
 
 1. `npm install @monocloud/auth-web-js`.
 2. In the MonoCloud dashboard, configure the client as a **Single Page Application** and register Callback URL, Sign-out URL, and Allowed Origin matching your local dev origin (e.g. `http://localhost:5173`).
-3. Create a `src/auth.ts` (or similar) that constructs and exports a single `MonoCloudWebJSClient` instance — pass `tenantDomain`, `clientId`, `appUrl`, `callbackPath`, `signOutCallbackPath`, and `defaultAuthParams.scopes = 'openid profile email offline_access'`.
+3. Create a `src/auth.ts` (or similar) that constructs and exports a single `MonoCloudWebJSClient` instance — pass `tenantDomain`, `clientId`, `appUrl`, `callbackPath`, `signOutPath`, and `defaultAuthParams.scopes = 'openid profile email offline_access'`.
 4. In your app entry (`main.ts` / `index.ts`), `await client.processCallback()` **before** mounting the UI.
 5. Wire `signIn()` / `signOut()` to buttons. Use `mode: 'popup'` if you want to avoid full-page redirects.
 6. Optionally call `signInSilent()` at bootstrap to restore SSO without prompting; catch `MonoCloudOPError` for `login_required`.

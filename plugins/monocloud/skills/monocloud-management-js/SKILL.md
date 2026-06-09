@@ -78,17 +78,18 @@ const management = MonoCloudManagementClient.init({
 
 `MonoCloudManagementClient` exposes one property per Management API resource area:
 
-| Property       | Resource                             | Source file (in this SDK)     |
-| -------------- | ------------------------------------ | ----------------------------- |
-| `.branding`    | `BrandingClient`                     | `clients/branding-api.ts`     |
-| `.clients`     | `ClientsClient` (OAuth applications) | `clients/clients-api.ts`      |
-| `.groups`      | `GroupsClient`                       | `clients/groups-api.ts`       |
-| `.keys`        | `KeysClient`                         | `clients/keys-api.ts`         |
-| `.logs`        | `LogsClient`                         | `clients/logs-api.ts`         |
-| `.options`     | `OptionsClient` (tenant settings)    | `clients/options-api.ts`      |
-| `.resources`   | `ResourcesClient` (API resources)    | `clients/resources-api.ts`    |
-| `.trustStores` | `TrustStoresClient`                  | `clients/trust-stores-api.ts` |
-| `.users`       | `UsersClient`                        | `clients/users-api.ts`        |
+| Property        | Resource                                                              | Source file (in this SDK)        |
+| --------------- | --------------------------------------------------------------------- | -------------------------------- |
+| `.branding`     | `BrandingClient`                                                      | `clients/branding-api.ts`        |
+| `.clients`      | `ClientsClient` (OAuth applications)                                  | `clients/clients-api.ts`         |
+| `.groups`       | `GroupsClient`                                                        | `clients/groups-api.ts`          |
+| `.keys`         | `KeysClient`                                                          | `clients/keys-api.ts`            |
+| `.logs`         | `LogsClient`                                                          | `clients/logs-api.ts`            |
+| `.networkZones` | `NetworkZonesClient` (added in 0.2.7 — IP & regional, **ScaleX**)     | `clients/network-zones-api.ts`   |
+| `.options`      | `OptionsClient` (tenant settings)                                     | `clients/options-api.ts`         |
+| `.resources`    | `ResourcesClient` (API resources, scopes, claim resources, **API access policies**) | `clients/resources-api.ts` |
+| `.trustStores`  | `TrustStoresClient`                                                   | `clients/trust-stores-api.ts`    |
+| `.users`        | `UsersClient`                                                         | `clients/users-api.ts`           |
 
 Each resource client method returns `Promise<MonoCloudResponse<T>>` (or `Promise<MonoCloudPageResponse<T>>` for paginated lists). The response object always has `.result`, `.status`, and (for paginated calls) `.pageData`.
 
@@ -251,10 +252,13 @@ try {
 2. **Trailing `/api/v1` on `domain`.** Pass the bare tenant URL — the SDK appends paths.
 3. **Confusing `private_data` and `public_data`.** Public data is exposed in user-facing tokens; private is admin-only. Both are arbitrary JSON.
 4. **Treating `patch*` as `put*`.** Patch is **merge**: fields you don't include are left alone. Set a field to `null` to clear it; omit it to leave unchanged.
-5. **Catching `Error` instead of `MonoCloudException`.** The typed hierarchy lets you branch on status (404 vs 409 vs 422) without parsing strings.
-6. **Reading `e.statusCode`.** `MonoCloudException` doesn't expose status as a property. Use `instanceof` against the subclass (e.g. `MonoCloudNotFoundException`) or read `(e as MonoCloudRequestException).response?.status`.
-7. **Forgetting pagination.** `getAll*` returns the first page by default. Loop using `pageData.has_next`.
-8. **Calling `getAllClients` or `getLogs`.** Real names are `clients.getAllApplications(...)` and `logs.getAllLogs(...)`. The Clients property exists, but its methods talk about `Application*`.
+5. **Sending immutable identifiers on `patch*`.** As of 0.2.5, `audience` was removed from `PatchApiResourceRequest`, and `name` was removed from `PatchApiScopeRequest`, `PatchScopeRequest`, and `PatchClaimResourceRequest`. They are identifiers and cannot be changed. TypeScript will flag this at the call site; the API rejects them at runtime.
+6. **Catching `Error` instead of `MonoCloudException`.** The typed hierarchy lets you branch on status (404 vs 409 vs 422) without parsing strings.
+7. **Reading `e.statusCode`.** `MonoCloudException` doesn't expose status as a property. Use `instanceof` against the subclass (e.g. `MonoCloudNotFoundException`) or read `(e as MonoCloudRequestException).response?.status`.
+8. **Forgetting pagination.** `getAll*` returns the first page by default. Loop using `pageData.has_next`.
+9. **Calling `getAllClients` or `getLogs`.** Real names are `clients.getAllApplications(...)` and `logs.getAllLogs(...)`. The Clients property exists, but its methods talk about `Application*`.
+10. **Using network-zone or API-access-policy endpoints without ScaleX.** These newer features require an active **ScaleX subscription** on the tenant; calls fail with a typed exception otherwise. Verify the tenant's plan before wiring them into production code.
+11. **Setting `enable_consent: true` on tenants without Secure+.** The field exists on `Application` / `CreateApplicationRequest` / `PatchApplicationRequest` for every tenant, but is only honored on **Secure+** subscriptions. Without it the API rejects the request.
 
 ## Onboarding checklist
 

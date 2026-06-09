@@ -1,17 +1,17 @@
 # `MonoCloud.Management` — API surface
 
-Exhaustive surface for the `MonoCloud.Management` NuGet package, verified against `src/management/` and `src/core/`. Method signatures are listed verbatim with default parameter values. IDE intellisense (go-to-definition) is the source of truth for request/response DTO fields under `MonoCloud.Management.Models`.
+Exhaustive surface for the `MonoCloud.Management` NuGet package, verified against `src/management/` and `src/core/` on **`MonoCloud.Management@0.2.8`**. Method signatures are listed verbatim with default parameter values. IDE intellisense (go-to-definition) is the source of truth for request/response DTO fields under `MonoCloud.Management.Models`.
 
 ## Quick reference
 
 The surface most apps actually reach for — full method lists, request types, and gotchas follow below.
 
 - Entry points: `new MonoCloudManagementClient(MonoCloudConfig)` (or `HttpClient` overload), or the DI extension `services.AddMonoCloudManagementClient(IConfiguration | Action<MonoCloudManagementOptions>)`.
-- Resource clients: `.Users`, `.Clients`, `.Groups`, `.Resources`, `.Keys`, `.Logs`, `.Options`, `.Branding`, `.TrustStores`.
-- Most-used methods: `Users.GetAllUsersAsync / CreateUserAsync / FindUserByIdAsync / PatchPrivateDataAsync / PatchPublicDataAsync / PatchClaimsAsync / DisableUserAsync / EnableUserAsync`, `Clients.GetAllApplicationsAsync / CreateApplicationAsync / PatchApplicationAsync`, `Groups.GetAllGroupsAsync / CreateGroupAsync`, `Keys.GetAllKeyMaterialsAsync`, `Logs.GetAllLogsAsync`.
+- Resource clients: `.Users`, `.Clients`, `.Groups`, `.Resources`, `.Keys`, `.Logs`, `.Options`, `.Branding`, `.TrustStores`, `.NetworkZones` (added in 0.2.8).
+- Most-used methods: `Users.GetAllUsersAsync / CreateUserAsync / FindUserByIdAsync / PatchPrivateDataAsync / PatchPublicDataAsync / PatchClaimsAsync / DisableUserAsync / EnableUserAsync / ChangePasswordAsync`, `Clients.GetAllApplicationsAsync / CreateApplicationAsync / PatchApplicationAsync`, `Groups.GetAllGroupsAsync / CreateGroupAsync`, `Keys.GetAllKeyMaterialsAsync`, `Logs.GetAllLogsAsync`, `Resources.GetAllApiAccessPoliciesAsync`, `NetworkZones.GetAllNetworkZonesAsync`.
 - Response wrappers: `MonoCloudResponse<T>` (`.Data`, `.Status`, `.Headers`) and `MonoCloudResponse<T, TPage>` (adds `.PageData`). Body is **`Data`** (not `Result`); status is **`Status`** (not `StatusCode`).
 - Errors: subclasses of `MonoCloudRequestException` — `MonoCloudNotFoundException`, `MonoCloudConflictException`, `MonoCloudIdentityValidationException`, … Base `MonoCloudException` has no `StatusCode`; branch with `catch (MonoCloudNotFoundException) { ... }` or read `(ex as MonoCloudRequestException)?.Response?.Status`.
-- Common gotchas: `Clients.*` methods are `*Application*` (not `*Client*`); see troubleshooting for the rest.
+- Common gotchas: `Clients.*` methods are `*Application*` (not `*Client*`); `Patch…Request` types **no longer carry immutable identifier fields** (`Audience`, `Name`) — see the troubleshooting page. See the rest in the troubleshooting file.
 
 ## Namespaces
 
@@ -23,7 +23,7 @@ The public surface is split across these namespaces (the package does **not** pu
 | `MonoCloud.Management.Core.Base` | `MonoCloudConfig`, `MonoCloudResponse`, `MonoCloudResponse<T>`, `MonoCloudResponse<T, TPage>`, `MonoCloudClientBase` |
 | `MonoCloud.Management.Core.Exception` | `MonoCloudException` and every `MonoCloud*Exception` subclass, plus `ProblemDetails`, `IdentityValidationProblemDetails`, `KeyValidationProblemDetails`, `IdentityError` |
 | `MonoCloud.Management.Core.Helpers` | `PageModel` |
-| `MonoCloud.Management.Clients` | `UsersClient`, `ClientsClient`, `GroupsClient`, `ResourcesClient`, `KeysClient`, `LogsClient`, `OptionsClient`, `BrandingClient`, `TrustStoresClient` |
+| `MonoCloud.Management.Clients` | `UsersClient`, `ClientsClient`, `GroupsClient`, `ResourcesClient`, `KeysClient`, `LogsClient`, `OptionsClient`, `BrandingClient`, `TrustStoresClient`, `NetworkZonesClient` |
 | `MonoCloud.Management.Models` | All request / response DTOs (`User`, `CreateUserRequest`, `Application`, `Group`, `ApiResource`, `Log`, `KeyMaterial`, `TrustStore`, etc.) and enums (`ExternalAuthenticators`, `ApplicationTypes`, `GrantTypes`, …) |
 
 Most consumer files will need at least `MonoCloud.Management`, `MonoCloud.Management.Core.Base`, `MonoCloud.Management.Core.Exception`, and `MonoCloud.Management.Models`. Project-wide `global using` declarations (.NET 6+) are the usual way to keep this tidy.
@@ -41,15 +41,16 @@ public class MonoCloudManagementClient
     public MonoCloudManagementClient(MonoCloudConfig configuration);
     public MonoCloudManagementClient(HttpClient httpClient);
 
-    public BrandingClient    Branding    { get; }
-    public ClientsClient     Clients     { get; }
-    public GroupsClient      Groups      { get; }
-    public KeysClient        Keys        { get; }
-    public LogsClient        Logs        { get; }
-    public OptionsClient     Options     { get; }
-    public ResourcesClient   Resources   { get; }
-    public TrustStoresClient TrustStores { get; }
-    public UsersClient       Users       { get; }
+    public BrandingClient     Branding     { get; }
+    public ClientsClient      Clients      { get; }
+    public GroupsClient       Groups       { get; }
+    public KeysClient         Keys         { get; }
+    public LogsClient         Logs         { get; }
+    public NetworkZonesClient NetworkZones { get; }   // added in 0.2.8
+    public OptionsClient      Options      { get; }
+    public ResourcesClient    Resources    { get; }
+    public TrustStoresClient  TrustStores  { get; }
+    public UsersClient        Users        { get; }
 }
 ```
 
@@ -326,6 +327,8 @@ OAuth applications. The property is `.Clients`, but methods are named after the 
 | `PatchApplicationAsync(string clientId, PatchApplicationRequest req, ct)` | `MonoCloudResponse<Application>` |
 | `DeleteApplicationAsync(string clientId, ct)` | `MonoCloudResponse` |
 
+> `Application`, `CreateApplicationRequest`, and `PatchApplicationRequest` carry an `EnableConsent` (bool?) property (added in 0.2.6). The field requires a **Secure+ subscription** to take effect — the API rejects requests that set it on lower tiers.
+
 Application secrets:
 
 - `GetAllApplicationSecretsAsync(clientId, ct)` → `MonoCloudResponse<List<Secret>>` (not paginated)
@@ -362,7 +365,7 @@ API resources:
 - `GetAllApiResourcesAsync(page=1, size=10, filter=null, sort=null, ct)` → `MonoCloudResponse<List<ApiResource>, PageModel>`
 - `CreateApiResourceAsync(CreateApiResourceRequest req, ct)` → `MonoCloudResponse<ApiResource>`
 - `FindApiResourceByIdAsync(string apiId, ct)` → `MonoCloudResponse<ApiResource>`
-- `PatchApiResourceAsync(string apiId, PatchApiResourceRequest req, ct)` → `MonoCloudResponse<ApiResource>`
+- `PatchApiResourceAsync(string apiId, PatchApiResourceRequest req, ct)` → `MonoCloudResponse<ApiResource>` — **`Audience` is immutable**; it is no longer a property of `PatchApiResourceRequest` (removed in 0.2.6).
 - `DeleteApiResourceAsync(string apiId, ct)` → `MonoCloudResponse`
 
 API resource secrets:
@@ -377,7 +380,7 @@ API scopes (resource-scoped):
 - `GetAllApiScopesAsync(string apiId, page=1, size=10, filter=null, sort=null, ct)` → `MonoCloudResponse<List<ApiScope>, PageModel>`
 - `CreateApiScopeAsync(string apiId, CreateApiScopeRequest req, ct)` → `MonoCloudResponse<ApiScope>`
 - `FindApiScopeByIdAsync(string scopeId, string apiId, ct)` → `MonoCloudResponse<ApiScope>`
-- `PatchApiScopeAsync(string scopeId, string apiId, PatchApiScopeRequest req, ct)` → `MonoCloudResponse<ApiScope>`
+- `PatchApiScopeAsync(string scopeId, string apiId, PatchApiScopeRequest req, ct)` → `MonoCloudResponse<ApiScope>` — **`Name` is immutable**; it is no longer a property of `PatchApiScopeRequest` (removed in 0.2.6).
 - `DeleteApiScopeAsync(string scopeId, string apiId, ct)` → `MonoCloudResponse`
 
 API resource ↔ client mappings:
@@ -389,12 +392,27 @@ API resource ↔ client mappings:
 - `PatchApiResourceClientAsync(string apiId, string clientId, PatchApiResourceClientRequest req, ct)` → `MonoCloudResponse<ApiResourceClient>`
 - `RemoveApiResourceClientAsync(string apiId, string clientId, ct)` → `MonoCloudResponse`
 
+API access policies (per resource — added in 0.2.8):
+
+Basic policies use structured conditions; advanced policies use the policy expression DSL. `ConvertApiAccessBasicToAdvancedPolicyAsync` turns a basic policy into an advanced one (one-way). Requires an active **ScaleX subscription**.
+
+- `GetAllApiAccessPoliciesAsync(string apiId, page=1, size=10, sort=null, ct)` → `MonoCloudResponse<List<ApiAccessPolicy>, PageModel>` — returns the union; branch on `Type`.
+- `CreateApiAccessBasicPolicyAsync(string apiId, CreateApiAccessBasicPolicyRequest req, ct)` → `MonoCloudResponse<BasicApiAccessPolicy>`
+- `FindApiAccessBasicPolicyByIdAsync(string apiId, string policyId, ct)` → `MonoCloudResponse<BasicApiAccessPolicy>`
+- `PatchApiAccessBasicPolicyAsync(string apiId, string policyId, PatchApiAccessBasicPolicyRequest req, ct)` → `MonoCloudResponse<BasicApiAccessPolicy>`
+- `DeleteApiAccessBasicPolicyAsync(string apiId, string policyId, ct)` → `MonoCloudResponse`
+- `ConvertApiAccessBasicToAdvancedPolicyAsync(string apiId, string policyId, ct)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
+- `CreateApiAccessAdvancedPolicyAsync(string apiId, CreateApiAccessAdvancedPolicyRequest req, ct)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
+- `FindApiAccessAdvancedPolicyByIdAsync(string apiId, string policyId, ct)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
+- `PatchApiAccessAdvancedPolicyAsync(string apiId, string policyId, PatchApiAccessAdvancedPolicyRequest req, ct)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
+- `DeleteApiAccessAdvancedPolicyAsync(string apiId, string policyId, ct)` → `MonoCloudResponse`
+
 Identity scopes (tenant-wide):
 
 - `GetAllScopesAsync(page=1, size=10, filter=null, sort=null, ct)` → `MonoCloudResponse<List<Scope>, PageModel>`
 - `CreateScopeAsync(CreateScopeRequest req, ct)` → `MonoCloudResponse<Scope>`
 - `FindScopeByIdAsync(string scopeId, ct)` → `MonoCloudResponse<Scope>`
-- `PatchScopeAsync(string scopeId, PatchScopeRequest req, ct)` → `MonoCloudResponse<Scope>`
+- `PatchScopeAsync(string scopeId, PatchScopeRequest req, ct)` → `MonoCloudResponse<Scope>` — **`Name` is immutable**; it is no longer a property of `PatchScopeRequest` (removed in 0.2.6).
 - `DeleteScopeAsync(string scopeId, ct)` → `MonoCloudResponse`
 
 Claim resources:
@@ -402,7 +420,7 @@ Claim resources:
 - `GetAllClaimResourcesAsync(page=1, size=10, filter=null, sort=null, ct)` → `MonoCloudResponse<List<ClaimResource>, PageModel>`
 - `CreateClaimResourceAsync(CreateClaimResourceRequest req, ct)` → `MonoCloudResponse<ClaimResource>`
 - `FindClaimResourceByIdAsync(string claimId, ct)` → `MonoCloudResponse<ClaimResource>`
-- `PatchClaimResourceAsync(string claimId, PatchClaimResourceRequest req, ct)` → `MonoCloudResponse<ClaimResource>`
+- `PatchClaimResourceAsync(string claimId, PatchClaimResourceRequest req, ct)` → `MonoCloudResponse<ClaimResource>` — **`Name` is immutable**; it is no longer a property of `PatchClaimResourceRequest` (removed in 0.2.6).
 - `DeleteClaimResourceAsync(string claimId, ct)` → `MonoCloudResponse`
 
 ## `Keys` — `KeysClient`
@@ -473,6 +491,42 @@ Banned certificates:
 - `GetAllBannedCertificatesAsync(string trustStoreId, ct)` → `MonoCloudResponse<List<BannedCertificate>>` (not paginated)
 - `BanTrustStoreCertificateAsync(string trustStoreId, BanTrustStoreCertificateRequest req, ct)` → `MonoCloudResponse<BannedCertificate>`
 - `UnbanTrustStoreCertificateAsync(string trustStoreId, string banId, ct)` → `MonoCloudResponse`
+
+Trust store sources (added in 0.2.8) — the `TrustStoreSource` enum models the two backings the API recognizes for a trust store's certificate chain:
+
+| `TrustStoreSource` value | Meaning |
+| --- | --- |
+| `Database` | Certificate chain uploaded directly through the API and stored alongside the trust store (the default). |
+| `S3`       | Certificate chain fetched from a customer-owned S3 object using a cross-account IAM role. |
+
+## `NetworkZones` — `NetworkZonesClient`
+
+Added in 0.2.8. Network zones group IP ranges or geographic regions and can be referenced by API access policies. Each zone is one of two types, discriminated by the `Type` field on `INetworkZone`:
+
+- **IP network zones** — explicit CIDR ranges.
+- **Regional network zones** — country/region codes.
+
+> Access to most network-zone endpoints requires an active **ScaleX subscription**. Calls fail with `MonoCloudForbiddenException` when the tenant does not have it.
+
+Listing:
+
+- `GetAllNetworkZonesAsync(page=1, size=10, filter=null, sort=null, ct)` → `MonoCloudResponse<List<INetworkZone>, PageModel>` — returns the union; branch on `Type`.
+
+IP zones:
+
+- `CreateIpNetworkZoneAsync(CreateIpNetworkZoneRequest req, ct)` → `MonoCloudResponse<IpNetworkZone>`
+- `FindIpNetworkZoneByIdAsync(string zoneId, ct)` → `MonoCloudResponse<IpNetworkZone>`
+- `PatchIpNetworkZoneAsync(string zoneId, PatchIpNetworkZoneRequest req, ct)` → `MonoCloudResponse<IpNetworkZone>`
+- `DeleteIpNetworkZoneAsync(string zoneId, ct)` → `MonoCloudResponse`
+
+Regional zones:
+
+- `CreateRegionalNetworkZoneAsync(CreateRegionalNetworkZoneRequest req, ct)` → `MonoCloudResponse<RegionalNetworkZone>`
+- `FindRegionalNetworkZoneByIdAsync(string zoneId, ct)` → `MonoCloudResponse<RegionalNetworkZone>`
+- `PatchRegionalNetworkZoneAsync(string zoneId, PatchRegionalNetworkZoneRequest req, ct)` → `MonoCloudResponse<RegionalNetworkZone>`
+- `DeleteRegionalNetworkZoneAsync(string zoneId, ct)` → `MonoCloudResponse`
+
+`NetworkZoneCategory` and `NetworkZoneOperator` are enums on the request/response models — refer to IDE intellisense for the valid values.
 
 ## Defaults
 

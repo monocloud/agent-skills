@@ -160,13 +160,71 @@ async IAsyncEnumerable<UserSummary> EachUserAsync(MonoCloudManagementClient mgmt
 }
 ```
 
+## Compile error: `'Audience' / 'Name' is not a member of 'Patch…Request'`
+
+**Symptom:** A `PatchApiResourceAsync` / `PatchApiScopeAsync` / `PatchScopeAsync` / `PatchClaimResourceAsync` call that previously compiled now fails because `Audience` (or `Name`) isn't a property of the corresponding request type, or you copy/paste from training-data examples and the project won't build.
+
+**Cause:** As of SDK **0.2.6**, those identifier fields were removed from the corresponding `Patch…Request` classes because they are immutable. Older code (or AI-generated code) treats them as updateable.
+
+**Fix:** Drop the field from the patch body. To change an audience or a scope/claim name, the API requires deleting and recreating the resource — not patching:
+
+```csharp
+// before — no longer compiles
+await management.Resources.PatchApiScopeAsync(scopeId, apiId, new PatchApiScopeRequest
+{
+    Name = "new-name",            // ❌ removed in 0.2.6
+    DisplayName = "New Name"
+});
+
+// after — only mutable fields go in the patch
+await management.Resources.PatchApiScopeAsync(scopeId, apiId, new PatchApiScopeRequest
+{
+    DisplayName = "New Name"
+});
+```
+
+Removed fields:
+
+| Patch type                   | Removed property |
+| ---------------------------- | ---------------- |
+| `PatchApiResourceRequest`    | `Audience`       |
+| `PatchApiScopeRequest`       | `Name`           |
+| `PatchScopeRequest`          | `Name`           |
+| `PatchClaimResourceRequest`  | `Name`           |
+
+## Network zone / API access policy / consent call rejected by the API
+
+**Symptom:** `NetworkZones.*`, `Resources.*ApiAccessPolicy*`, or `Application.EnableConsent = true` requests fail with a `MonoCloudForbiddenException` (or its problem-details `Status` is 403) mentioning the subscription tier — even though the methods/properties exist on the typed client.
+
+**Cause:** Several recent features are subscription-tier-gated even though the SDK surface is identical for every tenant:
+
+| Feature                                                  | Required tier |
+| -------------------------------------------------------- | ------------- |
+| `NetworkZones.*` (IP + regional)                         | ScaleX        |
+| `Resources.*ApiAccessPolicy*` (basic + advanced)         | ScaleX        |
+| `Application.EnableConsent`                              | Secure+       |
+| PAR (Pushed Authorization Requests)                      | Secure+       |
+| Back-channel logout                                      | Secure+       |
+| Sign-up restrictions                                     | Pro           |
+| `RemoveApplicationFromGroupAsync` / similar              | Pro           |
+
+**Fix:** Confirm the tenant's subscription before wiring these features. If the tenant is on a lower tier, the typed method/property still exists — the API just rejects the call. There is no SDK-level toggle; upgrade is the only path. Catch `MonoCloudForbiddenException` (or read `(ex as MonoCloudRequestException)?.Response?.Detail`) and surface a clear message to operators.
+
+## `Timeout` ignored or applied as milliseconds in 0.2.6 and earlier
+
+**Symptom:** On `MonoCloud.Management` ≤ 0.2.6, `MonoCloud:Management:Timeout` set to `30` resulted in either an immediate timeout (treated as 30 ms) or no apparent effect, depending on the code path.
+
+**Cause:** The DI extension (`MonoCloudManagementServiceExtensions`) fed the configured value into a millisecond field by mistake.
+
+**Fix:** Upgrade to **0.2.7+**. The DI extension now assigns via `TotalSeconds`. Direct `MonoCloudConfig` construction was always correct (`TimeSpan.FromSeconds(...)`) and was not affected.
+
 ## Older training-data SDK ghosts
 
-**Symptom:** Code references types or methods that don't compile: `MonoCloudClient` (singular), `.ManagementApi.UsersClient(...)`, `.ListUsersAsync(...)`, `.GetUsers(...)`.
+**Symptom:** Code references types or methods that don't compile: `MonoCloudClient` (singular), `.ManagementApi.UsersClient(...)`, `.ListUsersAsync(...)`, `.GetUsers(...)`, or `.NetworkZonesApi` (the real property is `.NetworkZones`).
 
 **Cause:** The agent is pattern-matching against a different or imagined SDK from training data.
 
-**Fix:** Always check the actual surface in [`api-surface.md`](api-surface.md). The real entry point is `MonoCloudManagementClient` (DI-registered or `new`-constructed with `MonoCloudConfig`); resource clients are direct properties (`.Users`, `.Clients`, `.Groups`, `.Resources`, etc.); methods follow `Get* / Find*ById / Create* / Patch* / Delete* / Disable* / Enable*` naming and end in `Async`.
+**Fix:** Always check the actual surface in [`api-surface.md`](api-surface.md). The real entry point is `MonoCloudManagementClient` (DI-registered or `new`-constructed with `MonoCloudConfig`); resource clients are direct properties (`.Users`, `.Clients`, `.Groups`, `.Resources`, `.NetworkZones`, etc.); methods follow `Get* / Find*ById / Create* / Patch* / Delete* / Disable* / Enable*` naming and end in `Async`. API access policies live under `.Resources` (e.g. `Resources.GetAllApiAccessPoliciesAsync`), not their own client.
 
 ## Diagnostic
 

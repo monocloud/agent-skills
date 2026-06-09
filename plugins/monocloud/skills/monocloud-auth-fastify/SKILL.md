@@ -49,7 +49,7 @@ Optional tuning:
 | ------------------------------------------- | ------- | ---------------------------------------------------------- |
 | `MONOCLOUD_BACKEND_INTROSPECT_JWT_TOKENS`   | `false` | If `true`, skip local JWT validation and always introspect |
 | `MONOCLOUD_BACKEND_CLOCK_SKEW`              | `0`     | Allowed clock drift (seconds)                              |
-| `MONOCLOUD_BACKEND_CLOCK_TOLERANCE`         | `300`   | Extra tolerance on time-based claims                       |
+| `MONOCLOUD_BACKEND_CLOCK_TOLERANCE`         | `60`    | Extra tolerance on time-based claims (seconds)             |
 | `MONOCLOUD_BACKEND_GROUPS_CLAIM`            | —       | Claim name that carries group memberships                  |
 | `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL`        | `false` | If `true`, all listed groups must match                    |
 | `MONOCLOUD_BACKEND_JWKS_CACHE_DURATION`     | —       | Seconds to cache the JWKS                                  |
@@ -132,7 +132,7 @@ interface MonoCloudBackendNodeClientOptions {
   metadataCacheDuration?: number;
   introspectJwtTokens?: boolean;
   cache?: ICache;
-  fetcher?: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
+  fetcher?: typeof fetch;              // (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 }
 ```
 
@@ -235,7 +235,7 @@ interface ICache {
 }
 ```
 
-Caching is keyed on the raw token string and respects `claims.exp` minus the configured clock skew/tolerance — short-lived tokens self-expire.
+Caching is keyed on the raw token string. The exact validity check is `cached.exp > now() + clockSkew - clockTolerance`, i.e. a cached entry stays valid until `claims.exp + clockTolerance - clockSkew < now()`. With the defaults (`clockSkew: 0`, `clockTolerance: 60`) the cache will keep returning a claim for up to ~60 seconds **past** the token's `exp`. Lower `clockTolerance` (e.g. to `0`) for strict expiry; raise it for higher hit rates at the cost of accepting slightly-expired tokens.
 
 ## JWT vs. introspection — how the SDK decides
 

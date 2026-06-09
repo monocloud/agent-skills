@@ -156,13 +156,61 @@ MonoCloudManagementClient.init({
 
 Same applies if you're reading the timeout from `MONOCLOUD_MANAGEMENT_TIMEOUT` — set it to a millisecond value.
 
+## TypeScript error: `'audience' / 'name' does not exist in type 'Patch…Request'`
+
+**Symptom:** A `patchApiResource`/`patchApiScope`/`patchScope`/`patchClaimResource` call that previously compiled now fails type-checking on the `audience` or `name` field, or the request body is silently rejected by the API.
+
+**Cause:** As of SDK **0.2.5**, those identifier fields were removed from the corresponding `Patch…Request` interfaces because they are immutable. Older code (or training data) treats them as updateable.
+
+**Fix:** Drop the field from the patch body. To change an audience or a scope/claim name, the API requires deleting and recreating the resource — not patching:
+
+```ts
+// before — no longer compiles
+await client.resources.patchApiScope(scopeId, apiId, {
+  name: 'new-name',          // ❌ removed in 0.2.5
+  display_name: 'New Name',
+});
+
+// after — only mutable fields go in the patch
+await client.resources.patchApiScope(scopeId, apiId, {
+  display_name: 'New Name',
+});
+```
+
+Removed fields:
+
+| Patch type                    | Removed field |
+| ----------------------------- | ------------- |
+| `PatchApiResourceRequest`     | `audience`    |
+| `PatchApiScopeRequest`        | `name`        |
+| `PatchScopeRequest`           | `name`        |
+| `PatchClaimResourceRequest`   | `name`        |
+
+## Network zone / API access policy / consent call rejected by the API
+
+**Symptom:** `networkZones.*`, `resources.*ApiAccessPolicy*`, or any code that sets `enable_consent: true` on an `Application` request fails with a `MonoCloudForbiddenException` / problem-details detail about subscription tier — even though the typed methods exist on the client.
+
+**Cause:** Several recent features are subscription-tier-gated even though the SDK surface is identical for every tenant:
+
+| Feature                                          | Required tier |
+| ------------------------------------------------ | ------------- |
+| `networkZones.*` (IP + regional)                 | ScaleX        |
+| `resources.*ApiAccessPolicy*` (basic + advanced) | ScaleX        |
+| `Application.enable_consent`                     | Secure+       |
+| PAR (Pushed Authorization Requests)              | Secure+       |
+| Back-channel logout                              | Secure+       |
+| Sign-up restrictions                             | Pro           |
+| `removeApplicationFromGroup`                     | Pro           |
+
+**Fix:** Confirm the tenant's subscription before wiring these features. If the tenant is on a lower tier, the typed method/field still exists — the API just rejects the call. There is no env-var override; upgrade is the only path. Catch `MonoCloudForbiddenException` (or read `.response?.detail`) and surface a clear message to operators.
+
 ## "Older training-data SDK ghosts"
 
 **Symptom:** Code references `MonoCloudClient` (singular), a `.managementApi` property, or method names like `listUsers` / `getUsers`. These don't exist.
 
 **Cause:** The agent is pattern-matching against a different or imagined SDK from training data.
 
-**Fix:** Always check the actual surface in [`api-surface.md`](api-surface.md). The real entry point is `MonoCloudManagementClient.init(...)`; resource clients hang off it (`.users`, `.clients`, `.groups`, etc.) and method names use the SDK's convention (`getAllUsers`, `findUserById`, `createUser`, `patchPrivateData`, `disableUser`).
+**Fix:** Always check the actual surface in [`api-surface.md`](api-surface.md). The real entry point is `MonoCloudManagementClient.init(...)`; resource clients hang off it (`.users`, `.clients`, `.groups`, `.networkZones`, etc.) and method names use the SDK's convention (`getAllUsers`, `findUserById`, `createUser`, `patchPrivateData`, `disableUser`, `getAllNetworkZones`, `createIpNetworkZone`). The network-zone client is `.networkZones` (camelCase, plural), not `.networkZone` or `.NetworkZones`; API access policies live under `.resources` (e.g. `resources.getAllApiAccessPolicies`), not their own client.
 
 ## Diagnostic
 

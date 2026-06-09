@@ -90,7 +90,8 @@ interface MonoCloudOptions {
   // Tokens / signing
   idTokenSigningAlg?: SecurityAlgorithms;
   filteredIdTokenClaims?: string[];
-  clockSkew?: number;        // seconds
+  clockSkew?: number;        // seconds; default 0; must be >= 0
+  clockTolerance?: number;   // seconds; default 60; must be >= 0 — additional tolerance applied to time-based ID-token claim validations (exp / nbf / auth_time + maxAge)
   responseTimeout?: number;  // ms
 
   // Caching
@@ -381,7 +382,8 @@ From `packages/node-core/src/options/defaults.ts`:
     signOut: '/api/auth/signout',
     userInfo: '/api/auth/userinfo',
   },
-  clockSkew: 60,                         // seconds
+  clockSkew: 0,                          // seconds (changed from 60 → 0 alongside the addition of clockTolerance)
+  clockTolerance: 60,                    // seconds (new in node-core: tolerance applied to all time-based ID-token claim checks)
   responseTimeout: 10000,                // ms
   usePar: false,
   fetchUserInfo: true,
@@ -420,13 +422,15 @@ Every scalar option has a `MONOCLOUD_AUTH_*` env var alias (constructor options 
 | `MONOCLOUD_AUTH_SCOPES` | `defaultAuthParams.scopes` | Space-separated |
 | `MONOCLOUD_AUTH_RESOURCE` | `defaultAuthParams.resource` | Default audience |
 | `MONOCLOUD_AUTH_USE_PAR` | `usePar` | Boolean |
-| `MONOCLOUD_AUTH_CLOCK_SKEW` | `clockSkew` | Seconds |
+| `MONOCLOUD_AUTH_CLOCK_SKEW` | `clockSkew` | Seconds; default `0`. Must be `>= 0` |
+| `MONOCLOUD_AUTH_CLOCK_TOLERANCE` | `clockTolerance` | Seconds; default `60`. Must be `>= 0`. Applied to time-based ID-token claim checks (`exp`, `nbf`, `auth_time + maxAge`) |
 | `MONOCLOUD_AUTH_RESPONSE_TIMEOUT` | `responseTimeout` | Milliseconds |
 | `MONOCLOUD_AUTH_FEDERATED_SIGNOUT` | `federatedSignOut` | Boolean |
 | `MONOCLOUD_AUTH_ALLOW_QUERY_PARAM_OVERRIDES` | `allowQueryParamOverrides` | Boolean |
 | `MONOCLOUD_AUTH_POST_LOGOUT_REDIRECT_URI` | `postLogoutRedirectUri` | |
 | `MONOCLOUD_AUTH_FETCH_USER_INFO` | `fetchUserInfo` | Boolean |
 | `MONOCLOUD_AUTH_REFETCH_USER_INFO` | `refetchUserInfo` | Boolean |
+| `MONOCLOUD_AUTH_REFETCH_STRICT_PROFILE_SYNC` | `strictProfileSync` | Boolean. Despite the `REFETCH_` prefix this maps to `strictProfileSync` (not `refetchUserInfo`) — when `true`, the session's `user` is fully replaced from the refreshed profile rather than merged |
 | `MONOCLOUD_AUTH_ID_TOKEN_SIGNING_ALG` | `idTokenSigningAlg` | e.g. `RS256` |
 | `MONOCLOUD_AUTH_FILTERED_ID_TOKEN_CLAIMS` | `filteredIdTokenClaims` | Space-separated |
 | `MONOCLOUD_AUTH_CALLBACK_URL` | `routes.callback` | |

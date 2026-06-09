@@ -1,6 +1,6 @@
 ---
 name: monocloud-management-dotnet
-description: Use when calling the MonoCloud Management API from .NET — installing or configuring the `MonoCloud.Management` NuGet package, constructing `MonoCloudManagementClient` (direct or via DI with `AddMonoCloudManagementClient`), calling resource clients (`Users`, `Clients`, `Groups`, `Resources`, `Keys`, `Logs`, `Options`, `Branding`, `TrustStores`), reading `MonoCloudResponse<T>.Data` (and `PageData` for paginated lists), handling `MonoCloudException` subclasses, or troubleshooting `MonoCloud:Management:Domain` / `MonoCloud:Management:ApiKey` / 401 / 403 / validation errors.
+description: Use when calling the MonoCloud Management API from .NET — installing or configuring the `MonoCloud.Management` NuGet package, constructing `MonoCloudManagementClient` (direct or via DI with `AddMonoCloudManagementClient`), calling resource clients (`Users`, `Clients`, `Groups`, `Resources`, `Keys`, `Logs`, `Options`, `Branding`, `TrustStores`, `NetworkZones`), reading `MonoCloudResponse<T>.Data` (and `PageData` for paginated lists), handling `MonoCloudException` subclasses, or troubleshooting `MonoCloud:Management:Domain` / `MonoCloud:Management:ApiKey` / 401 / 403 / validation errors.
 license: MIT
 ---
 
@@ -141,17 +141,18 @@ builder.Services.AddMonoCloudManagementClient(builder.Configuration, options =>
 
 `MonoCloudManagementClient` exposes one property per Management API resource area:
 
-| Property       | Resource           | Backing type        |
-| -------------- | ------------------ | ------------------- |
-| `.Branding`    | Branding           | `BrandingClient`    |
-| `.Clients`     | OAuth applications | `ClientsClient`     |
-| `.Groups`      | Groups             | `GroupsClient`      |
-| `.Keys`        | Signing keys       | `KeysClient`        |
-| `.Logs`        | Audit logs         | `LogsClient`        |
-| `.Options`     | Tenant options     | `OptionsClient`     |
-| `.Resources`   | API resources      | `ResourcesClient`   |
-| `.TrustStores` | mTLS trust stores  | `TrustStoresClient` |
-| `.Users`       | Users              | `UsersClient`       |
+| Property        | Resource                                                            | Backing type         |
+| --------------- | ------------------------------------------------------------------- | -------------------- |
+| `.Branding`     | Branding                                                            | `BrandingClient`     |
+| `.Clients`      | OAuth applications                                                  | `ClientsClient`      |
+| `.Groups`       | Groups                                                              | `GroupsClient`       |
+| `.Keys`         | Signing keys                                                        | `KeysClient`         |
+| `.Logs`         | Audit logs                                                          | `LogsClient`         |
+| `.NetworkZones` | IP + regional network zones (added in 0.2.8 — **ScaleX** required)  | `NetworkZonesClient` |
+| `.Options`      | Tenant options                                                      | `OptionsClient`      |
+| `.Resources`    | API resources, scopes, claim resources, **API access policies**     | `ResourcesClient`    |
+| `.TrustStores`  | mTLS trust stores                                                   | `TrustStoresClient`  |
+| `.Users`        | Users                                                               | `UsersClient`        |
 
 Each method on a resource client returns `Task<MonoCloudResponse<T>>` or `Task<MonoCloudResponse<T, PageModel>>` for paginated lists, plus a `CancellationToken` parameter. See [`references/api-surface.md`](references/api-surface.md) for the full method index.
 
@@ -313,12 +314,15 @@ catch (MonoCloudRequestException ex)
 
 1. **Hardcoding the API key in `appsettings.json`.** Use User Secrets (`dotnet user-secrets set "MonoCloud:Management:ApiKey" "..."`) for dev and a secret manager (Azure Key Vault, AWS Secrets Manager, etc.) in production.
 2. **Trailing `/api/v1` on `Domain`.** Pass the bare tenant URL — the SDK appends `/api/`.
-3. **Mixing seconds vs milliseconds for timeout.** `MonoCloud:Management:Timeout` is **seconds**, mirroring `TimeSpan.FromSeconds`. Don't use ms here.
+3. **Mixing seconds vs milliseconds for timeout.** `MonoCloud:Management:Timeout` is **seconds**, mirroring `TimeSpan.FromSeconds`. Don't use ms here. (Fixed in 0.2.7 — the DI extension previously fed the value into a millisecond field; ensure you are on 0.2.7+ if you are seeing timeout values that look 1000× off.)
+4. **Sending immutable identifiers on `Patch…` requests.** As of 0.2.6, `Audience` was removed from `PatchApiResourceRequest`, and `Name` was removed from `PatchApiScopeRequest`, `PatchScopeRequest`, and `PatchClaimResourceRequest`. They are identifiers and cannot be changed. The C# property is gone — old code that set it will no longer compile.
 5. **Catching `Exception` everywhere.** Catch the specific `MonoCloudException` subclass — status-driven branching is the point.
 6. **Reading `ex.StatusCode`.** `MonoCloudException` has no `StatusCode` property; use `instanceof` against the subclass or read `(ex as MonoCloudRequestException)?.Response?.Status`.
 7. **Reading `response.Result`.** The body property is `Data`, not `Result`. Status is `Status`, not `StatusCode`. Headers is `IDictionary<string, IEnumerable<string>>`.
 8. **Creating a new `MonoCloudManagementClient` per request when using DI.** `AddMonoCloudManagementClient` already registers it transient over `IHttpClientFactory`. Don't `new` it inside controllers.
 9. **Calling `MonoCloud.Management.Core` types directly.** The core types are re-exported under `using MonoCloud.Management;` — don't add a project reference to the core package.
+10. **Using `NetworkZones` or `Resources.*ApiAccessPolicy*` endpoints without ScaleX.** These newer features require an active **ScaleX subscription** on the tenant; calls fail with a typed `MonoCloudForbiddenException` otherwise. Verify the tenant's plan before wiring them into production.
+11. **Setting `EnableConsent = true` on tenants without Secure+.** The `EnableConsent` property exists on `Application` / `CreateApplicationRequest` / `PatchApplicationRequest` for every tenant, but is only honored on **Secure+** subscriptions. The API rejects the request otherwise.
 
 ## Onboarding checklist
 

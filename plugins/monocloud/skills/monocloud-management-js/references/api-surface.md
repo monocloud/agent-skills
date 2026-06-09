@@ -1,17 +1,17 @@
 # `@monocloud/management` — API surface
 
-Exhaustive export list, verified against `packages/management/src/` and `packages/core/src/` on `@monocloud/management@0.2.5`. Methods are listed verbatim with positional parameters; TypeScript intellisense (`go-to-definition`) is the source of truth for full request/response model fields.
+Exhaustive export list, verified against `packages/management/src/` and `packages/core/src/` on `@monocloud/management@0.2.7`. Methods are listed verbatim with positional parameters; TypeScript intellisense (`go-to-definition`) is the source of truth for full request/response model fields.
 
 ## Quick reference
 
 The surface most apps actually reach for — full method lists, request types, and gotchas follow below.
 
 - Entry point: `MonoCloudManagementClient.init(options?, fetcher?)` — returns a singleton-style client.
-- Resource clients hang off it: `.users`, `.clients`, `.groups`, `.resources`, `.keys`, `.logs`, `.options`, `.branding`, `.trustStores`.
-- Most-used methods: `users.getAllUsers / createUser / findUserById / patchPrivateData / patchPublicData / patchClaims / disableUser / enableUser`, `clients.getAllApplications / createApplication / patchApplication`, `groups.getAllGroups / createGroup`, `keys.getAllKeyMaterials`, `logs.getAllLogs`.
+- Resource clients hang off it: `.users`, `.clients`, `.groups`, `.resources`, `.keys`, `.logs`, `.options`, `.branding`, `.trustStores`, `.networkZones`.
+- Most-used methods: `users.getAllUsers / createUser / findUserById / patchPrivateData / patchPublicData / patchClaims / disableUser / enableUser / changePassword`, `clients.getAllApplications / createApplication / patchApplication`, `groups.getAllGroups / createGroup`, `keys.getAllKeyMaterials`, `logs.getAllLogs`, `resources.getAllApiAccessPolicies`, `networkZones.getAllNetworkZones`.
 - Response wrappers: `MonoCloudResponse<T>` (`.result`, `.status`, `.headers`) and `MonoCloudPageResponse<T>` (adds `.pageData`).
 - Errors: subclasses of `MonoCloudRequestException` — `MonoCloudNotFoundException`, `MonoCloudConflictException`, `MonoCloudIdentityValidationException`, … Base `MonoCloudException` has no `statusCode`; branch with `instanceof` or read `(e as MonoCloudRequestException).response?.status`.
-- Common gotchas: `clients.*` methods are named `*Application*` (not `*Client*`); the user identifier is `User.user_id` (not `user.id`); the SDK appends `/api/` itself — don't include it in `domain`.
+- Common gotchas: `clients.*` methods are named `*Application*` (not `*Client*`); the user identifier is `User.user_id` (not `user.id`); the SDK appends `/api/` itself — don't include it in `domain`. `PATCH` request types **no longer carry immutable identifier fields** (`audience`, `name`) — see the gotcha section below.
 
 ## Top-level exports
 
@@ -47,7 +47,12 @@ import type {
 } from '@monocloud/management';
 ```
 
-All request/response models (`User`, `CreateUserRequest`, `Application`, `Group`, `ApiResource`, `Log`, `KeyMaterial`, `TrustStore`, etc.) are re-exported from the package root via `export * from './models'`.
+All request/response models (`User`, `CreateUserRequest`, `Application`, `Group`, `ApiResource`, `Log`, `KeyMaterial`, `TrustStore`, etc.) are re-exported from the package root via `export * from './models'`. Newer models worth noting:
+
+- **API access policies** (`resources.*ApiAccessPolicy*`): `ApiAccessPolicy`, `BasicApiAccessPolicy`, `AdvancedApiAccessPolicy`, `CreateApiAccessBasicPolicyRequest`, `CreateApiAccessAdvancedPolicyRequest`, `PatchApiAccessBasicPolicyRequest`, `PatchApiAccessAdvancedPolicyRequest`, `ApiAccessPolicyActions`, `CreateApiAccessPolicyActionsRequest`, `PatchApiAccessPolicyActionsRequest`, `PolicyTypes`.
+- **Network zones** (`networkZones.*`): `INetworkZone` (discriminated union by `type`), `IpNetworkZone`, `RegionalNetworkZone`, `CreateIpNetworkZoneRequest`, `CreateRegionalNetworkZoneRequest`, `PatchIpNetworkZoneRequest`, `PatchRegionalNetworkZoneRequest`, `NetworkZoneCategory`, `NetworkZoneOperator`.
+- **Trust store sources**: `TrustStoreSource` enum (`'database'` | `'s3'`).
+- **Application consent**: `Application` / `CreateApplicationRequest` / `PatchApplicationRequest` carry an `enable_consent: boolean` field. **Secure+ subscription required.**
 
 `MonoCloudPageResponse<T>`, `MonoCloudClientBase`, `ProblemDetails`, and `MonoCloudRequest` are part of the runtime shape (they're the return types of paginated methods, the parent of every resource client, the `.response` field on `MonoCloudRequestException`, etc.) but they aren't re-exported as named imports from `@monocloud/management`. Import them from `@monocloud/management-core` if you need to reference them directly — usually TypeScript inference from the method return types is enough.
 
@@ -62,6 +67,7 @@ class MonoCloudManagementClient {
   readonly groups: GroupsClient;
   readonly keys: KeysClient;
   readonly logs: LogsClient;
+  readonly networkZones: NetworkZonesClient;   // added in 0.2.7
   readonly options: OptionsClient;
   readonly resources: ResourcesClient;
   readonly trustStores: TrustStoresClient;
@@ -312,7 +318,7 @@ API resources:
 - `getAllApiResources(page?, size?, filter?, sort?)` → `MonoCloudPageResponse<ApiResource[]>`
 - `createApiResource(req: CreateApiResourceRequest)` → `MonoCloudResponse<ApiResource>`
 - `findApiResourceById(apiId)` → `MonoCloudResponse<ApiResource>`
-- `patchApiResource(apiId, req: PatchApiResourceRequest)` → `MonoCloudResponse<ApiResource>`
+- `patchApiResource(apiId, req: PatchApiResourceRequest)` → `MonoCloudResponse<ApiResource>` — **`audience` is immutable**; it is no longer part of `PatchApiResourceRequest`.
 - `deleteApiResource(apiId)` → `MonoCloudResponse<null>`
 
 API resource secrets:
@@ -327,7 +333,7 @@ API scopes (scoped to one resource):
 - `getAllApiScopes(apiId, page?, size?, filter?, sort?)` → `MonoCloudPageResponse<ApiScope[]>`
 - `createApiScope(apiId, req: CreateApiScopeRequest)` → `MonoCloudResponse<ApiScope>`
 - `findApiScopeById(scopeId, apiId)` → `MonoCloudResponse<ApiScope>`
-- `patchApiScope(scopeId, apiId, req: PatchApiScopeRequest)` → `MonoCloudResponse<ApiScope>`
+- `patchApiScope(scopeId, apiId, req: PatchApiScopeRequest)` → `MonoCloudResponse<ApiScope>` — **`name` is immutable**; it is no longer part of `PatchApiScopeRequest`.
 - `deleteApiScope(scopeId, apiId)` → `MonoCloudResponse<null>`
 
 API resource ↔ client mappings:
@@ -339,12 +345,27 @@ API resource ↔ client mappings:
 - `patchApiResourceClient(apiId, clientId, req: PatchApiResourceClientRequest)` → `MonoCloudResponse<ApiResourceClient>`
 - `removeApiResourceClient(apiId, clientId)` → `MonoCloudResponse<null>`
 
+API access policies (per resource — added in 0.2.7):
+
+Basic policies use structured conditions; advanced policies use the policy expression DSL. `convertApiAccessBasicToAdvancedPolicy` turns a basic policy into an advanced one (one-way).
+
+- `getAllApiAccessPolicies(apiId, page?, size?, filter?, sort?)` → `MonoCloudPageResponse<ApiAccessPolicy[]>` — returns the union; discriminate by `type`.
+- `createApiAccessBasicPolicy(apiId, req: CreateApiAccessBasicPolicyRequest)` → `MonoCloudResponse<BasicApiAccessPolicy>`
+- `findApiAccessBasicPolicyById(apiId, policyId)` → `MonoCloudResponse<BasicApiAccessPolicy>`
+- `patchApiAccessBasicPolicy(apiId, policyId, req: PatchApiAccessBasicPolicyRequest)` → `MonoCloudResponse<BasicApiAccessPolicy>`
+- `deleteApiAccessBasicPolicy(apiId, policyId)` → `MonoCloudResponse<null>`
+- `convertApiAccessBasicToAdvancedPolicy(apiId, policyId)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
+- `createApiAccessAdvancedPolicy(apiId, req: CreateApiAccessAdvancedPolicyRequest)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
+- `findApiAccessAdvancedPolicyById(apiId, policyId)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
+- `patchApiAccessAdvancedPolicy(apiId, policyId, req: PatchApiAccessAdvancedPolicyRequest)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
+- `deleteApiAccessAdvancedPolicy(apiId, policyId)` → `MonoCloudResponse<null>`
+
 Identity scopes (tenant-wide):
 
 - `getAllScopes(page?, size?, filter?, sort?)` → `MonoCloudPageResponse<Scope[]>`
 - `createScope(req: CreateScopeRequest)` → `MonoCloudResponse<Scope>`
 - `findScopeById(scopeId)` → `MonoCloudResponse<Scope>`
-- `patchScope(scopeId, req: PatchScopeRequest)` → `MonoCloudResponse<Scope>`
+- `patchScope(scopeId, req: PatchScopeRequest)` → `MonoCloudResponse<Scope>` — **`name` is immutable**; it is no longer part of `PatchScopeRequest`.
 - `deleteScope(scopeId)` → `MonoCloudResponse<null>`
 
 Claim resources (custom claims):
@@ -352,7 +373,7 @@ Claim resources (custom claims):
 - `getAllClaimResources(page?, size?, filter?, sort?)` → `MonoCloudPageResponse<ClaimResource[]>`
 - `createClaimResource(req: CreateClaimResourceRequest)` → `MonoCloudResponse<ClaimResource>`
 - `findClaimResourceById(claimId)` → `MonoCloudResponse<ClaimResource>`
-- `patchClaimResource(claimId, req: PatchClaimResourceRequest)` → `MonoCloudResponse<ClaimResource>`
+- `patchClaimResource(claimId, req: PatchClaimResourceRequest)` → `MonoCloudResponse<ClaimResource>` — **`name` is immutable**; it is no longer part of `PatchClaimResourceRequest`.
 - `deleteClaimResource(claimId)` → `MonoCloudResponse<null>`
 
 ## `client.keys` — `KeysClient`
@@ -425,6 +446,42 @@ Banned certificates:
 - `getAllBannedCertificates(trustStoreId)` → `MonoCloudResponse<BannedCertificate[]>` (not paginated)
 - `banTrustStoreCertificate(trustStoreId, req: BanTrustStoreCertificateRequest)` → `MonoCloudResponse<BannedCertificate>`
 - `unbanTrustStoreCertificate(trustStoreId, banId)` → `MonoCloudResponse<null>`
+
+Trust store sources (added in 0.2.7) — the API recognizes two backings for the certificate chain, exposed via the `TrustStoreSource` enum:
+
+| `TrustStoreSource` value | Meaning |
+| --- | --- |
+| `'database'` | Certificate chain uploaded directly through the API and stored alongside the trust store (the default). |
+| `'s3'`       | Certificate chain fetched from a customer-owned S3 object using a cross-account IAM role. |
+
+## `client.networkZones` — `NetworkZonesClient`
+
+Added in 0.2.7. Network zones group IP ranges or geographic regions and can be referenced by API access policies. Each zone is one of two types, discriminated by the `type` field on `INetworkZone`:
+
+- **IP network zones** — explicit CIDR ranges.
+- **Regional network zones** — country/region codes.
+
+> Access to most network-zone endpoints requires an active **ScaleX subscription**. Calls fail with a typed exception when the tenant does not have it.
+
+Listing:
+
+- `getAllNetworkZones(page?, size?, filter?, sort?)` → `MonoCloudPageResponse<INetworkZone[]>` — returns the union; discriminate by `type`.
+
+IP zones:
+
+- `createIpNetworkZone(req: CreateIpNetworkZoneRequest)` → `MonoCloudResponse<IpNetworkZone>`
+- `findIpNetworkZoneById(zoneId)` → `MonoCloudResponse<IpNetworkZone>`
+- `patchIpNetworkZone(zoneId, req: PatchIpNetworkZoneRequest)` → `MonoCloudResponse<IpNetworkZone>`
+- `deleteIpNetworkZone(zoneId)` → `MonoCloudResponse<null>`
+
+Regional zones:
+
+- `createRegionalNetworkZone(req: CreateRegionalNetworkZoneRequest)` → `MonoCloudResponse<RegionalNetworkZone>`
+- `findRegionalNetworkZoneById(zoneId)` → `MonoCloudResponse<RegionalNetworkZone>`
+- `patchRegionalNetworkZone(zoneId, req: PatchRegionalNetworkZoneRequest)` → `MonoCloudResponse<RegionalNetworkZone>`
+- `deleteRegionalNetworkZone(zoneId)` → `MonoCloudResponse<null>`
+
+`NetworkZoneCategory` and `NetworkZoneOperator` are exported enums used by the request/response models — refer to TypeScript intellisense for valid values.
 
 ## Defaults
 

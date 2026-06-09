@@ -17,15 +17,15 @@ async function init() {
 }
 ```
 
-Don't dispatch on the path yourself — the SDK matches the URL against `appUrl + callbackPath` / `appUrl + signOutCallbackPath` internally. There is no need for a dedicated callback page or route component.
+Don't dispatch on the path yourself — the SDK matches the URL against `appUrl + callbackPath` / `appUrl + signOutPath` internally. There is no need for a dedicated callback page or route component.
 
 ## Callback URL not allowed (popup shows MonoCloud error page)
 
 **Symptom:** Sign-in redirects (or the popup) to MonoCloud, then MonoCloud renders an error page mentioning the redirect URI or "callback URL not allowed."
 
-**Cause:** The full URL formed from `appUrl + callbackPath` does not appear in the client's **Allowed Callback URLs** in the MonoCloud dashboard. Common slip-ups: `http` vs `https`, missing port (e.g. `:5173`), trailing slash, or a path mismatch.
+**Cause:** The full URL formed from `appUrl + callbackPath` does not appear in the client's **Allowed Callback URLs** in the MonoCloud dashboard. Common slip-ups: `http` vs `https`, missing port (e.g. `:5173`), or a path mismatch.
 
-**Fix:** In the dashboard, open the SPA client and add the exact URL. Same for `signOutCallbackPath` under **Allowed Sign-out URLs**, and for the `appUrl` origin under **Allowed Origins (CORS)**.
+**Fix:** In the dashboard, open the SPA client and add the exact URL. Same for `signOutPath` under **Allowed Sign-out URLs**, and for the `appUrl` origin under **Allowed Origins (CORS)**.
 
 ```
 Allowed Callback URLs:  http://localhost:5173/callback
@@ -34,6 +34,8 @@ Allowed Origins (CORS): http://localhost:5173
 ```
 
 If you change `appUrl` or the paths in code, mirror the change in the dashboard.
+
+> **Trailing slashes are forgiving.** Since 0.1.1 the SDK trims trailing slashes both when constructing redirect URIs and when matching the current URL inside `processCallback()`. Registering `http://localhost:5173/callback/` (with slash) and using `callbackPath: '/callback'` (without) will still match. Likewise `appUrl: 'http://localhost:5173/'` is normalized to `http://localhost:5173`.
 
 ## Popup blocked
 

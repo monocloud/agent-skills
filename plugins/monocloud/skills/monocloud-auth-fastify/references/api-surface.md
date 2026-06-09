@@ -20,6 +20,11 @@ import { ... } from '@monocloud/backend-node/fastify';
 
 The root `@monocloud/backend-node` exports the same shared types and the client class, but **not** `protectApi` (that lives in the framework subpaths).
 
+The package also ships two helper subpaths that re-export from `@monocloud/auth-core`:
+
+- `@monocloud/backend-node/utils` — re-exports `@monocloud/auth-core/utils` (e.g. `isUserInGroup`, `parseCallbackParams`, `generateState`, `generatePKCE`, `generateNonce`, plus session/state encryption helpers). The one most relevant to bearer-token APIs is `isUserInGroup` — useful when you want to re-check membership outside the hook, or build custom guards.
+- `@monocloud/backend-node/internal` — re-exports `@monocloud/auth-core/internal` (e.g. `getBoolean` and other coercion helpers). Most apps will not need this; reach for it only when probing edge cases.
+
 ## Functions
 
 ### `protectApi`
@@ -106,12 +111,12 @@ interface MonoCloudBackendNodeClientOptions {
   clientAuthMethod?: ClientAuthMethod; // default 'client_secret_post'
   groupOptions?: { groupsClaim?: string; matchAll?: boolean };
   clockSkew?: number;                  // default 0
-  clockTolerance?: number;             // default 300
+  clockTolerance?: number;             // default 60 (seconds)
   jwksCacheDuration?: number;          // seconds
   metadataCacheDuration?: number;      // seconds
   introspectJwtTokens?: boolean;       // default false — force introspection for JWTs
   cache?: ICache;                       // constructor-only token-claims cache
-  fetcher?: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
+  fetcher?: typeof fetch;              // i.e. (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 }
 
 type ClientAuthMethod =
@@ -178,13 +183,35 @@ class MonoCloudBackendNodeClient extends MonoCloudOidcBackendClient {
 
 `MonoCloudOidcBackendClient` (the parent class) is also re-exported from this subpath for advanced cases — for example, when you want the OIDC token-validation primitives without MonoCloud-specific defaults. Most apps should reach for `MonoCloudBackendNodeClient` instead.
 
+```ts
+class MonoCloudOidcBackendClient {
+  constructor(
+    tenantDomain: string,                // positional
+    audience: string,                    // positional — NOT inside options like MonoCloudBackendNodeClient
+    options?: MonoCloudOidcBackendClientOptions,
+  );
+}
+```
+
+Key differences vs `MonoCloudBackendNodeClient`:
+
+- `audience` is a **required positional argument**, not a field on the options object.
+- No `MONOCLOUD_BACKEND_*` env-var loading — every option you want must be passed in code.
+- No built-in `cache` (no claims caching helper).
+- `clientAuthMethod` defaults to **`'client_secret_basic'`** (the OIDC spec default), **not** `'client_secret_post'` as it does on `MonoCloudBackendNodeClient`. If you switch from the wrapper to the parent class without re-specifying this, introspection requests change auth method and may start returning 401s from the OP.
+
+If you find yourself reaching for the parent class to "simplify," reconsider — `MonoCloudBackendNodeClient` is the supported path.
+
 ## Errors (re-exported from `@monocloud/auth-core`)
 
 ```ts
 class MonoCloudAuthBaseError extends Error {}
 class MonoCloudValidationError extends MonoCloudAuthBaseError {}  // bad config / empty token
 class MonoCloudTokenError extends MonoCloudAuthBaseError {}       // token invalid / missing scopes/groups
-class MonoCloudOPError extends MonoCloudAuthBaseError {}          // OP returned an OAuth error
+class MonoCloudOPError extends MonoCloudAuthBaseError {           // OP returned an OAuth error
+  error: string;                                                   // OAuth `error` code (e.g. 'invalid_token')
+  errorDescription?: string;                                       // optional `error_description` from the OP
+}
 class MonoCloudHttpError extends MonoCloudAuthBaseError {}        // network / unexpected status
 ```
 
@@ -227,7 +254,7 @@ From `packages/node-backend/src/options/defaults.ts`:
 ```ts
 {
   clockSkew: 0,
-  clockTolerance: 300,
+  clockTolerance: 60,
   clientAuthMethod: 'client_secret_post',
   introspectJwtTokens: false,
 }
