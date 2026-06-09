@@ -34,14 +34,16 @@ When an agent has these skills loaded, asking it to _"add MonoCloud login to my 
 
 ## Skills in this repo
 
-| Skill                                                                                          | Covers                                                                 | SDK                               |
-| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------- |
-| [`monocloud-quickstart`](plugins/monocloud/skills/monocloud-quickstart/SKILL.md)               | Smart router — detects framework and points to the correct skill below | —                                 |
-| [`monocloud-auth-nextjs`](plugins/monocloud/skills/monocloud-auth-nextjs/SKILL.md)             | Sign-in / sessions / route protection / components / hooks for Next.js | `@monocloud/auth-nextjs`          |
-| [`monocloud-auth-express`](plugins/monocloud/skills/monocloud-auth-express/SKILL.md)           | JWT / introspection token validation, scope + group enforcement        | `@monocloud/backend-node/express` |
-| [`monocloud-auth-fastify`](plugins/monocloud/skills/monocloud-auth-fastify/SKILL.md)           | Same engine as above, via a Fastify `onRequest` hook                   | `@monocloud/backend-node/fastify` |
-| [`monocloud-management-js`](plugins/monocloud/skills/monocloud-management-js/SKILL.md)         | Programmatic  API access for Node.js     | `@monocloud/management`           |
-| [`monocloud-management-dotnet`](plugins/monocloud/skills/monocloud-management-dotnet/SKILL.md) | Programmatic  API access for C# with .NET DI registration                           | `MonoCloud.Management`            |
+| Skill                                                                                          | Covers                                                                                                | SDK                               |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------- |
+| [`monocloud-quickstart`](plugins/monocloud/skills/monocloud-quickstart/SKILL.md)               | Smart router — detects framework and points to the correct skill below                                | —                                 |
+| [`monocloud-auth-nextjs`](plugins/monocloud/skills/monocloud-auth-nextjs/SKILL.md)             | Sign-in / sessions / route protection / components / hooks for Next.js                                | `@monocloud/auth-nextjs`          |
+| [`monocloud-auth-react`](plugins/monocloud/skills/monocloud-auth-react/SKILL.md)               | React SPA SDK — `<MonoCloudAuthProvider>`, `useAuth`, sign-in/up/out and protected components         | `@monocloud/auth-react`           |
+| [`monocloud-auth-express`](plugins/monocloud/skills/monocloud-auth-express/SKILL.md)           | JWT / introspection token validation, scope + group enforcement                                       | `@monocloud/backend-node/express` |
+| [`monocloud-auth-fastify`](plugins/monocloud/skills/monocloud-auth-fastify/SKILL.md)           | Same engine as above, via a Fastify `onRequest` hook                                                  | `@monocloud/backend-node/fastify` |
+| [`monocloud-web-js`](plugins/monocloud/skills/monocloud-web-js/SKILL.md)                       | Browser SDK for vanilla JS / TS SPAs — redirect/popup/silent flows, sessions, pluggable storage       | `@monocloud/auth-web-js`          |
+| [`monocloud-management-js`](plugins/monocloud/skills/monocloud-management-js/SKILL.md)         | Programmatic Management API access for Node.js                                                        | `@monocloud/management`           |
+| [`monocloud-management-dotnet`](plugins/monocloud/skills/monocloud-management-dotnet/SKILL.md) | Programmatic Management API access for C# with .NET DI registration                                   | `MonoCloud.Management`            |
 
 ## Installing
 
