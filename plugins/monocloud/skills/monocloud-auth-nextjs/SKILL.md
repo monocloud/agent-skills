@@ -47,7 +47,7 @@ Optional:
 | ------------------------------ | ---------------------- | ---------------------------------- |
 | `MONOCLOUD_AUTH_SCOPES`        | `openid profile email` | Default scopes                     |
 | `MONOCLOUD_AUTH_RESOURCE`      | —                      | Default resource for access tokens |
-| `MONOCLOUD_AUTH_GROUPS_CLAIM`  | `groups`               | Claim name used by group checks    |
+| `MONOCLOUD_AUTH_GROUPS_CLAIM`  | `groups`               | Claim name used by group checks. Also a real `MonoCloudOptions.groupsClaim` constructor option since `@monocloud/auth-nextjs@0.1.19` — per-call `groupsClaim` arg → constructor option → this env var → `"groups"`. |
 | `MONOCLOUD_AUTH_CALLBACK_URL`  | `/api/auth/callback`   | Customize auth routes              |
 | `MONOCLOUD_AUTH_SIGNIN_URL`    | `/api/auth/signin`     |                                    |
 | `MONOCLOUD_AUTH_SIGNOUT_URL`   | `/api/auth/signout`    |                                    |

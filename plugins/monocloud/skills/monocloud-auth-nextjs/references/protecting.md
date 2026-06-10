@@ -15,7 +15,7 @@ Full option shapes and behavior for every protection helper in `@monocloud/auth-
 | Client Component page | `protectClientPage(Component, options?)` | Window-level redirect to sign-in URL | Render `"Access Denied"` |
 | Inline client JSX | `<Protected fallback groups>` | Render `fallback` | Render `onGroupAccessDenied(user)` |
 
-All `groups` checks honor `groupsClaim` (defaults to env `MONOCLOUD_AUTH_GROUPS_CLAIM`, then `"groups"`) and `matchAll` (defaults to `false` — user must belong to **any** listed group).
+All `groups` checks honor `groupsClaim` (resolution order: per-call `groupsClaim` arg → constructor `MonoCloudOptions.groupsClaim` → env `MONOCLOUD_AUTH_GROUPS_CLAIM` → `"groups"`) and `matchAll` (defaults to `false` — user must belong to **any** listed group).
 
 ## `authMiddleware(options?)`
 

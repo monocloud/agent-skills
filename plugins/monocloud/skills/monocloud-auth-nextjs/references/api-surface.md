@@ -90,6 +90,7 @@ interface MonoCloudOptions {
   // Tokens / signing
   idTokenSigningAlg?: SecurityAlgorithms;
   filteredIdTokenClaims?: string[];
+  groupsClaim?: string;      // default 'groups' — used as the fallback when a per-call `groupsClaim` is not passed to protect / protectApi / protectPage / protectClientPage / isUserInGroup
   clockSkew?: number;        // seconds; default 0; must be >= 0
   clockTolerance?: number;   // seconds; default 60; must be >= 0 — additional tolerance applied to time-based ID-token claim validations (exp / nbf / auth_time + maxAge)
   responseTimeout?: number;  // ms
@@ -392,6 +393,7 @@ From `packages/node-core/src/options/defaults.ts`:
   defaultAuthParams: { scopes: 'openid profile email', responseType: 'code' },
   allowQueryParamOverrides: true,
   strictProfileSync: false,
+  groupsClaim: 'groups',
   filteredIdTokenClaims: ['iss','exp','nbf','aud','nonce','iat','auth_time','c_hash','at_hash','s_hash'],
   session: {
     cookie: { httpOnly: true, name: 'session', path: '/', sameSite: 'lax', persistent: true },
@@ -456,7 +458,7 @@ Every scalar option has a `MONOCLOUD_AUTH_*` env var alias (constructor options 
 | `MONOCLOUD_AUTH_STATE_COOKIE_PERSISTENT` | `state.cookie.persistent` | Boolean |
 | `MONOCLOUD_AUTH_JWKS_CACHE_DURATION` | `jwksCacheDuration` | Seconds |
 | `MONOCLOUD_AUTH_METADATA_CACHE_DURATION` | `metadataCacheDuration` | Seconds |
-| `MONOCLOUD_AUTH_GROUPS_CLAIM` | (server default for `groupsClaim`) | Used by `protect*` / `isUserInGroup` when `groupsClaim` is not passed |
-| `NEXT_PUBLIC_MONOCLOUD_AUTH_GROUPS_CLAIM` | (client default for `groupsClaim`) | Used by `protectClientPage` / `<Protected>` when `groupsClaim` is not passed |
+| `MONOCLOUD_AUTH_GROUPS_CLAIM` | `groupsClaim` (constructor fallback) | Default `'groups'`. Server-side fallback used by `protect*` / `isUserInGroup` when neither a per-call `groupsClaim` arg nor a constructor `MonoCloudOptions.groupsClaim` is set |
+| `NEXT_PUBLIC_MONOCLOUD_AUTH_GROUPS_CLAIM` | (client default for `groupsClaim`) | Client-side fallback used by `protectClientPage` / `<Protected>` when `groupsClaim` is not passed |
 
 Hooks (`onSessionCreating`, `onBackChannelLogout`, `onSetApplicationState`) and constructor-only objects (`session.store`, custom `defaultAuthParams.acrValues`, etc.) have no env-var alias.
