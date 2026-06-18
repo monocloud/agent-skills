@@ -128,6 +128,39 @@ class MonoCloudWebJSClient {
 
 `signInSilent`, `refreshSession`, `refetchUserInfo`, and `getTokens` are wrapped in cross-tab + in-flight dedupe locks (`navigator.locks` in secure contexts, `browser-tabs-lock` otherwise) so concurrent callers collapse onto a single network round-trip.
 
+## `MonoCloudOidcClient`
+
+This is the low-level OIDC client exposed as `client.oidcClient`. It includes support for the OAuth 2.0 Device Authorization Grant.
+
+```ts
+class MonoCloudOidcClient {
+  deviceAuthorizationRequest(
+    params: DeviceAuthorizationParams,
+    options?: AuthenticateOptions
+  ): Promise<DeviceAuthorizationResponse>;
+
+  deviceAuthorizationGrant(
+    deviceResponse: DeviceAuthorizationResponse,
+    params?: AuthorizationParams
+  ): Promise<Tokens>;
+}
+
+interface DeviceAuthorizationParams {
+  clientId?: string;
+  scopes?: string;
+  audience?: string;
+}
+
+interface DeviceAuthorizationResponse {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string;
+  expiresIn: number;
+  interval?: number;
+}
+```
+
 ## `MonoCloudWebJSClientOptions`
 
 ```ts
