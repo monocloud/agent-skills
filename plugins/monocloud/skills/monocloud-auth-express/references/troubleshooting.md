@@ -72,9 +72,9 @@ Both pieces matter: `protect()` populates `claims`, and the cast tells TypeScrip
 
 **Symptom:** `protect({ groups: ['admin'] })` always returns 403 even for admin users.
 
-**Cause:** The SDK doesn't know which claim carries groups. It defaults to no group check unless you tell it.
+**Cause:** By default the SDK looks for group memberships in the `groups` claim. If the token carries groups under a different claim name (or carries no matching claim at all), the check fails.
 
-**Fix:** Set `MONOCLOUD_BACKEND_GROUPS_CLAIM=groups` (or whatever your custom claim is). Decode a token and inspect — the group memberships are usually under `groups` but can be customized per tenant.
+**Fix:** If your groups live under the default `groups` claim, no config is needed. If they live under a custom claim, set `MONOCLOUD_BACKEND_GROUPS_CLAIM=<your-claim>`. Decode a token and inspect — the group memberships default to `groups` but can be customized per tenant.
 
 If `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL=true`, **every** group in the call must match. By default any one match is enough.
 

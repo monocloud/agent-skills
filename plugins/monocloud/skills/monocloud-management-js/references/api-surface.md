@@ -336,15 +336,6 @@ API scopes (scoped to one resource):
 - `patchApiScope(scopeId, apiId, req: PatchApiScopeRequest)` → `MonoCloudResponse<ApiScope>` — **`name` is immutable**; it is no longer part of `PatchApiScopeRequest`.
 - `deleteApiScope(scopeId, apiId)` → `MonoCloudResponse<null>`
 
-API resource ↔ client mappings:
-
-- `getAllApiResourceClients(apiId, page?, size?, sort?)` → `MonoCloudPageResponse<ApiResourceClient[]>`
-- `getAllClientApiResources(clientId, page?, size?, sort?)` → `MonoCloudPageResponse<ApiResourceClient[]>`
-- `createApiResourceClient(apiId, clientId, req: CreateApiResourceClientRequest)` → `MonoCloudResponse<ApiResourceClient>`
-- `findApiResourceClient(apiId, clientId)` → `MonoCloudResponse<ApiResourceClient>`
-- `patchApiResourceClient(apiId, clientId, req: PatchApiResourceClientRequest)` → `MonoCloudResponse<ApiResourceClient>`
-- `removeApiResourceClient(apiId, clientId)` → `MonoCloudResponse<null>`
-
 API access policies (per resource — added in 0.2.7):
 
 Basic policies use structured conditions; advanced policies use the policy expression DSL. `convertApiAccessBasicToAdvancedPolicy` turns a basic policy into an advanced one (one-way).

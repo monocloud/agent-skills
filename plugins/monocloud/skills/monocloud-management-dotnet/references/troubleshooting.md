@@ -206,7 +206,7 @@ Removed fields:
 | PAR (Pushed Authorization Requests)                      | Secure+       |
 | Back-channel logout                                      | Secure+       |
 | Sign-up restrictions                                     | Pro           |
-| `RemoveApplicationFromGroupAsync` / similar              | Pro           |
+| `RemoveGroupFromApplicationAsync` / similar              | Pro           |
 
 **Fix:** Confirm the tenant's subscription before wiring these features. If the tenant is on a lower tier, the typed method/property still exists — the API just rejects the call. There is no SDK-level toggle; upgrade is the only path. Catch `MonoCloudForbiddenException` (or read `(ex as MonoCloudRequestException)?.Response?.Detail`) and surface a clear message to operators.
 

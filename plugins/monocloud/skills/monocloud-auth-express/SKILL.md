@@ -50,7 +50,7 @@ Optional tuning:
 | `MONOCLOUD_BACKEND_INTROSPECT_JWT_TOKENS`   | `false` | If `true`, skip local JWT validation and always introspect |
 | `MONOCLOUD_BACKEND_CLOCK_SKEW`              | `0`     | Allowed clock drift (seconds)                              |
 | `MONOCLOUD_BACKEND_CLOCK_TOLERANCE`         | `60`    | Extra tolerance on time-based claims (seconds)             |
-| `MONOCLOUD_BACKEND_GROUPS_CLAIM`            | —       | Claim name that carries group memberships                  |
+| `MONOCLOUD_BACKEND_GROUPS_CLAIM`            | `groups` | Claim name that carries group memberships                  |
 | `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL`        | `false` | If `true`, all listed groups must match                    |
 | `MONOCLOUD_BACKEND_JWKS_CACHE_DURATION`     | —       | Seconds to cache the JWKS                                  |
 | `MONOCLOUD_BACKEND_METADATA_CACHE_DURATION` | —       | Seconds to cache the OIDC discovery doc                    |
@@ -219,7 +219,7 @@ Caching is keyed on the raw token string. The exact validity check is `cached.ex
 - If the token has three dot-separated parts (`xxx.yyy.zzz`) **and** `introspectJwtTokens` is false (default): the SDK validates the JWT locally using JWKS fetched from the tenant. No network call per request after the JWKS cache warms.
 - Otherwise (opaque tokens, or `introspectJwtTokens=true`): the SDK calls the OIDC introspection endpoint. Requires `clientId` + `clientSecret` (or another `clientAuthMethod`).
 
-This means: **JWT tokens don't require client credentials.** Opaque tokens do. If you see `MonoCloudValidationError: clientId is required` when receiving opaque tokens, set the introspection env vars.
+This means: **JWT tokens don't require client credentials.** Opaque tokens do. If you see `MonoCloudValidationError: The clientId option must be configured to introspect access tokens` when receiving opaque tokens, set the introspection env vars.
 
 ## Common pitfalls
 

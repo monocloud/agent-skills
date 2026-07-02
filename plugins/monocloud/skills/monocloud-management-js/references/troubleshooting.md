@@ -200,7 +200,7 @@ Removed fields:
 | PAR (Pushed Authorization Requests)              | Secure+       |
 | Back-channel logout                              | Secure+       |
 | Sign-up restrictions                             | Pro           |
-| `removeApplicationFromGroup`                     | Pro           |
+| `removeGroupFromApplication`                     | Pro           |
 
 **Fix:** Confirm the tenant's subscription before wiring these features. If the tenant is on a lower tier, the typed method/field still exists — the API just rejects the call. There is no env-var override; upgrade is the only path. Catch `MonoCloudForbiddenException` (or read `.response?.detail`) and surface a clear message to operators.
 

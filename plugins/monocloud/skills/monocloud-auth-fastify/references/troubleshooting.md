@@ -95,7 +95,7 @@ fastify.addHook("onRequest", protect());
 
 **Symptom:** `protect({ groups: ['admin'] })` always 403s, even for admins.
 
-**Cause:** `MONOCLOUD_BACKEND_GROUPS_CLAIM` isn't set. The SDK doesn't enforce group checks without it.
+**Cause:** The token doesn't carry group memberships under the claim name the SDK is reading. `groupsClaim` defaults to `groups` when `MONOCLOUD_BACKEND_GROUPS_CLAIM` is unset, so group checks are still enforced — they just read the `groups` claim, which your token may populate under a different name (or not at all).
 
 **Fix:** Set `MONOCLOUD_BACKEND_GROUPS_CLAIM=groups` (or whatever your tenant uses). Decode a token and verify the claim name. If `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL=true`, every listed group must match (default is any).
 

@@ -383,15 +383,6 @@ API scopes (resource-scoped):
 - `PatchApiScopeAsync(string scopeId, string apiId, PatchApiScopeRequest req, ct)` → `MonoCloudResponse<ApiScope>` — **`Name` is immutable**; it is no longer a property of `PatchApiScopeRequest` (removed in 0.2.6).
 - `DeleteApiScopeAsync(string scopeId, string apiId, ct)` → `MonoCloudResponse`
 
-API resource ↔ client mappings:
-
-- `GetAllApiResourceClientsAsync(string apiId, page=1, size=10, sort=null, ct)` → `MonoCloudResponse<List<ApiResourceClient>, PageModel>`
-- `GetAllClientApiResourcesAsync(string clientId, page=1, size=10, sort=null, ct)` → `MonoCloudResponse<List<ApiResourceClient>, PageModel>`
-- `CreateApiResourceClientAsync(string apiId, string clientId, CreateApiResourceClientRequest req, ct)` → `MonoCloudResponse<ApiResourceClient>`
-- `FindApiResourceClientAsync(string apiId, string clientId, ct)` → `MonoCloudResponse<ApiResourceClient>`
-- `PatchApiResourceClientAsync(string apiId, string clientId, PatchApiResourceClientRequest req, ct)` → `MonoCloudResponse<ApiResourceClient>`
-- `RemoveApiResourceClientAsync(string apiId, string clientId, ct)` → `MonoCloudResponse`
-
 API access policies (per resource — added in 0.2.8):
 
 Basic policies use structured conditions; advanced policies use the policy expression DSL. `ConvertApiAccessBasicToAdvancedPolicyAsync` turns a basic policy into an advanced one (one-way). Requires an active **ScaleX subscription**.

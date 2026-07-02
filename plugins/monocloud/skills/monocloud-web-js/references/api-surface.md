@@ -301,15 +301,15 @@ interface MonoCloudTokens extends AccessToken {
 interface MonoCloudSession {
   user: MonoCloudUser;                // ID-token claims + UserInfo claims (filtered)
   idToken?: string;
-  accessTokens: AccessToken[];
+  accessTokens?: AccessToken[];
   refreshToken?: string;
-  authorizedScopes: string;           // space-separated
+  authorizedScopes?: string;          // space-separated
 }
 
 interface AccessToken {
   accessToken: string;
   scopes: string;                     // space-separated, actually granted
-  requestedScopes: string;            // space-separated, what we asked for
+  requestedScopes?: string;           // space-separated, what we asked for
   resource?: string;                  // audience / resource indicator
   accessTokenExpiration: number;      // unix seconds
 }

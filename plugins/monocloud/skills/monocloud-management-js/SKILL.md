@@ -1,12 +1,12 @@
 ---
 name: monocloud-management-js
-description: Use when calling the MonoCloud Management API from Node.js / TypeScript — installing or configuring `@monocloud/management`, initializing `MonoCloudManagementClient` with `domain` + `apiKey`, calling resource clients (`users`, `clients`, `groups`, `resources`, `keys`, `logs`, `options`, `branding`, `trustStores`), reading paginated results via `MonoCloudPageResponse`, handling `MonoCloudException` subclasses, or troubleshooting `MONOCLOUD_MANAGEMENT_DOMAIN` / `MONOCLOUD_MANAGEMENT_API_KEY` / 401 / 403 / validation errors.
+description: Use when calling the MonoCloud Management API from Node.js / TypeScript — installing or configuring `@monocloud/management`, initializing `MonoCloudManagementClient` with `domain` + `apiKey`, calling resource clients (`users`, `clients`, `groups`, `resources`, `keys`, `logs`, `options`, `branding`, `trustStores`, `networkZones`), reading paginated results via `MonoCloudPageResponse`, handling `MonoCloudException` subclasses, or troubleshooting `MONOCLOUD_MANAGEMENT_DOMAIN` / `MONOCLOUD_MANAGEMENT_API_KEY` / 401 / 403 / validation errors.
 license: MIT
 ---
 
 # MonoCloud Management JS SDK (`@monocloud/management`)
 
-Typed JavaScript / TypeScript SDK for the MonoCloud Management API. Use it to programmatically manage users, applications, groups, API resources, sign-in options, branding, logs, keys, and trust stores in a MonoCloud tenant.
+Typed JavaScript / TypeScript SDK for the MonoCloud Management API. Use it to programmatically manage users, applications, groups, API resources, sign-in options, branding, logs, keys, trust stores, and network zones in a MonoCloud tenant.
 
 ## Package identity — read this first
 
@@ -101,7 +101,7 @@ See [`references/api-surface.md`](references/api-surface.md) for the full method
 interface MonoCloudResponse<T> {
   result: T;
   status: number;
-  headers: Record<string, string>;
+  headers: Record<string, any>;
 }
 
 interface MonoCloudPageResponse<T> extends MonoCloudResponse<T> {

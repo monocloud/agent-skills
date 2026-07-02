@@ -36,7 +36,7 @@ No environment variables — **all configuration is passed as props to `<MonoClo
 Configure the client as a **Single Page Application** with:
 
 - **Allowed Callback URLs:** the full URL the OP should redirect back to. If you use `autoProcessCallback` (default) this is typically just the app root (e.g. `http://localhost:5173`). If you mount `<ProcessCallback>` on a dedicated route, register `appUrl + callbackPath` (e.g. `http://localhost:5173/callback`).
-- **Allowed Sign-out URLs:** matches `appUrl + signOutCallbackPath` (or the app root if you didn't set one).
+- **Allowed Sign-out URLs:** matches `appUrl + signOutPath` (or the app root if you didn't set one).
 - **Allowed Origins (CORS):** the bare origin of the app (e.g. `http://localhost:5173`).
 - **Scopes:** at minimum `openid`, `profile`, `email`. Add `offline_access` to get refresh tokens.
 
@@ -117,7 +117,7 @@ Common optional:
 | ---------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------- |
 | `appUrl`               | `window.location.origin` (recommended to pass explicitly) | Used to build redirect URIs and validate cross-origin postMessages. |
 | `callbackPath`         | `/`                      | Relative path where MonoCloud redirects after sign-in. Must be in **Allowed Callback URLs**.               |
-| `signOutCallbackPath`  | `/`                      | Relative path where MonoCloud redirects after sign-out. Must be in **Allowed Sign-out URLs**.              |
+| `signOutPath`  | `/`                      | Relative path where MonoCloud redirects after sign-out. Must be in **Allowed Sign-out URLs**.              |
 | `autoProcessCallback`  | `true`                   | When `true`, the provider runs `processCallback()` once on mount. Set to `false` to handle the callback on a dedicated route with `<ProcessCallback>`. |
 | `defaultAuthParams`    | —                        | Pre-set `scopes` / `resource` / `responseType` / `prompt`, etc., on every auth request.                   |
 | `resources`            | —                        | Additional `Indicator[]` for `getTokens()`.                                                                |
@@ -129,7 +129,7 @@ Common optional:
 | `validateIdToken`      | `true`                   | When `false`, skip ID token signature/claims validation. Not recommended.                                  |
 | `authWindowTimeout`    | `600` (sec)              | Timeout for popup / iframe auth windows.                                                                   |
 | `popupWindowWidth` / `popupWindowHeight` | `375` / `600` | Popup dimensions.                                                                           |
-| `clockSkew` / `clockTolerance` | `60` / `60` (sec) | ID token clock skew / tolerance.                                                                       |
+| `clockSkew` / `clockTolerance` | `0` / `60` (sec) | ID token clock skew / tolerance.                                                                       |
 
 `<MonoCloudAuthProvider>` constructs the client **once** in `useState(() => new MonoCloudWebJSClient(props))` — props changes after the initial render do **not** rebuild the client. Treat all client-config props as bootstrap-time only. If you genuinely need to swap configuration at runtime, unmount and remount the provider (e.g. by `key`).
 
@@ -422,7 +422,7 @@ useEffect(() => {
 4. **Using this skill in a Next.js app.** Don't. Use `@monocloud/auth-nextjs` instead — it gives cookie sessions, middleware, and server helpers. This SDK is for plain React SPAs.
 5. **Forgetting `offline_access`.** Refresh tokens are only issued when `offline_access` is granted. Without it `refreshSession()` and the auto-refresh in `getTokens()` throw `MonoCloudValidationError`. Add it to `defaultAuthParams.scopes` (or pass via `<SignIn scopes="…">`).
 6. **`signIn({ mode: 'popup' })` from `useEffect`.** Browsers block popups not opened from a user gesture. Call inside a click handler — the `<SignIn>` component already does this correctly; if you call `signIn` yourself, do it from `onClick`, not `useEffect`.
-7. **Mismatched dashboard URLs.** `appUrl + callbackPath` (and `appUrl + signOutCallbackPath`) must exactly match the dashboard entries — including scheme, host, port, path. Same for the CORS origin.
+7. **Mismatched dashboard URLs.** `appUrl + callbackPath` (and `appUrl + signOutPath`) must exactly match the dashboard entries — including scheme, host, port, path. Same for the CORS origin.
 8. **`MemoryStorage` + default `postCallback`.** The default `postCallback` does a full page reload, which empties memory and drops the just-created session. Either keep the default `LocalStorage`/`SessionStorage` or pass a `postCallback` that navigates with your router (no reload).
 9. **Wrapping the provider above `<BrowserRouter>` when `postCallback` uses `useNavigate`.** `useNavigate` only works inside `<BrowserRouter>`. Put the provider **inside** the router subtree.
 10. **Shipping a `clientSecret` prop.** SPAs are public clients. Don't pass `clientSecret` — the bundle is public and the secret leaks.
