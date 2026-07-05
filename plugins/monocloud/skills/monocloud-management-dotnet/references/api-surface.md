@@ -1,6 +1,6 @@
 # `MonoCloud.Management` — API surface
 
-Exhaustive surface for the `MonoCloud.Management` NuGet package, verified against `src/management/` and `src/core/` on **`MonoCloud.Management@0.2.8`**. Method signatures are listed verbatim with default parameter values. IDE intellisense (go-to-definition) is the source of truth for request/response DTO fields under `MonoCloud.Management.Models`.
+Exhaustive surface for the `MonoCloud.Management` NuGet package, verified against `src/management/` and `src/core/` on **`MonoCloud.Management@0.2.9`**. Method signatures are listed verbatim with default parameter values. IDE intellisense (go-to-definition) is the source of truth for request/response DTO fields under `MonoCloud.Management.Models`.
 
 ## Quick reference
 
@@ -429,7 +429,7 @@ There is no `CreateKeyAsync`, `FindKeyByIdAsync`, or `GetAllKeysAsync` — those
 
 ## `Options` — `OptionsClient`
 
-Tenant-wide settings. The SDK currently exposes `Authentication`, `Communication`, and sign-up-custom-fields. Per-provider external authenticator options and other tenant areas are not surfaced as discrete methods.
+Tenant-wide settings. The SDK exposes `Authentication`, `Communication`, sign-up custom fields, and (added in 0.2.9) external-authenticator CRUD. Per-provider MFA/authenticator *option shapes* ride on the option models rather than as discrete methods.
 
 - `FindAuthenticationOptionsAsync(ct)` → `MonoCloudResponse<AuthenticationOptions>`
 - `PatchAuthenticationOptionsAsync(PatchAuthenticationOptionsRequest req, ct)` → `MonoCloudResponse<AuthenticationOptions>`
@@ -440,9 +440,19 @@ Sign-up custom fields:
 
 - `GetAllSignUpCustomFieldsAsync(ct)` → `MonoCloudResponse<List<SignUpCustomField>>`
 - `CreateSignUpCustomFieldAsync(CreateSignUpCustomFieldRequest req, ct)` → `MonoCloudResponse<SignUpCustomField>`
-- `FindSignUpCustomFieldByNameAsync(string claimName, ct)` → `MonoCloudResponse<SignUpCustomField>`
+- `FindSignUpCustomFieldAsync(string claimName, ct)` → `MonoCloudResponse<SignUpCustomField>`
 - `PatchSignUpCustomFieldAsync(string claimName, PatchSignUpCustomFieldRequest req, ct)` → `MonoCloudResponse<SignUpCustomField>`
 - `DeleteSignUpCustomFieldAsync(string claimName, ct)` → `MonoCloudResponse`
+
+External authenticators (added in 0.2.9):
+
+- `GetAllExternalAuthenticatorsAsync(ct)` → `MonoCloudResponse<List<ExternalAuthenticator>>` (not paginated)
+- `CreateExternalAuthenticatorAsync(CreateExternalAuthenticatorRequest req, ct)` → `MonoCloudResponse<ExternalAuthenticator>`
+- `FindExternalAuthenticatorAsync(string name, ct)` → `MonoCloudResponse<ExternalAuthenticator>`
+- `PatchExternalAuthenticatorAsync(string name, PatchExternalAuthenticatorRequest req, ct)` → `MonoCloudResponse<ExternalAuthenticator>`
+- `DeleteExternalAuthenticatorAsync(string name, ct)` → `MonoCloudResponse`
+
+> External authenticators are keyed by `name` (not a Guid/id). Related models: `ExternalAuthenticator`, `CreateExternalAuthenticatorRequest` / `PatchExternalAuthenticatorRequest`, the connection models (`CreateExternalAuthenticatorConnectionRequest` / `PatchExternalAuthenticatorConnectionRequest` / `ExternalAuthenticatorConnectionResponse`), and the credentials models (`CreateExternalAuthenticatorCredentialsRequest` / `PatchExternalAuthenticatorCredentialsRequest` / `ExternalAuthenticatorCredentialsResponse`).
 
 ## `Branding` — `BrandingClient`
 
@@ -459,36 +469,50 @@ There is no umbrella `GetBrandingAsync` / `PatchBrandingAsync`.
 
 ## `TrustStores` — `TrustStoresClient`
 
-mTLS trust stores, plus revocation and ban lists.
+Reworked in 0.2.9 into a full PKI + SPIFFE surface (~22 methods). The client now manages two independent trust-store families — **PKI** (X.509 / mTLS) and **SPIFFE** — each with its own CRUD and default-selection surface, plus certificate revocations and a ban list on the PKI side and a banned-SVID list on the SPIFFE side.
 
-Trust stores:
+PKI trust stores:
 
-- `GetAllTrustStoresAsync(page=1, size=10, sort=null, ct)` → `MonoCloudResponse<List<TrustStoreSummary>, PageModel>`
-- `CreateTrustStoreAsync(CreateTrustStoreRequest req, ct)` → `MonoCloudResponse<TrustStore>`
-- `FindTrustStoreByIdAsync(string trustStoreId, ct)` → `MonoCloudResponse<TrustStore>`
-- `PatchTrustStoreAsync(string trustStoreId, PatchTrustStoreRequest req, ct)` → `MonoCloudResponse<TrustStore>`
-- `DeleteTrustStoreAsync(string trustStoreId, ct)` → `MonoCloudResponse`
-- `SetTrustStoreDefaultAsync(string trustStoreId, ct)` → `MonoCloudResponse<TrustStore>`
+- `GetAllPkiTrustStoresAsync(page=1, size=10, sort=null, ct)` → `MonoCloudResponse<List<PkiTrustStoreSummary>, PageModel>`
+- `CreatePkiTrustStoreAsync(CreatePkiTrustStoreRequest req, ct)` → `MonoCloudResponse<PkiTrustStore>`
+- `FindPkiTrustStoreByIdAsync(string trustStoreId, ct)` → `MonoCloudResponse<PkiTrustStore>`
+- `PatchPkiTrustStoreAsync(string trustStoreId, PatchPkiTrustStoreRequest req, ct)` → `MonoCloudResponse<PkiTrustStore>`
+- `DeletePkiTrustStoreAsync(string trustStoreId, ct)` → `MonoCloudResponse`
+- `SetPkiTrustStoreDefaultAsync(string trustStoreId, ct)` → `MonoCloudResponse<PkiTrustStore>`
 
-Certificate revocations:
+Certificate revocations (PKI):
 
 - `GetAllRevocationsAsync(string trustStoreId, page=1, size=10, sort=null, ct)` → `MonoCloudResponse<List<RevocationGrouped>, PageModel>`
-- `AddCertificateRevocationAsync(string trustStoreId, AddCertificateRevocationRequest req, ct)` → `MonoCloudResponse<CertificateRevocation>`
-- `FindCertificateRevocationAsync(string trustStoreId, string revocationId, ct)` → `MonoCloudResponse<CertificateRevocation>`
+- `AddCertificateRevocationAsync(string trustStoreId, AddCertificateRevocationRequest req, ct)` → `MonoCloudResponse<ICertificateRevocation>`
+- `FindCertificateRevocationAsync(string trustStoreId, string revocationId, ct)` → `MonoCloudResponse<ICertificateRevocation>`
 - `RemoveCertificateRevocationAsync(string trustStoreId, string revocationId, ct)` → `MonoCloudResponse`
 
-Banned certificates:
+> `ICertificateRevocation` is a discriminated union deserialized by a JSON type-discriminator converter; the concrete implementations are `BaseCertificateRevocation` and `DeltaCertificateRevocation`. `RevocationGrouped` (+ `RevocationGroupedDelta`) is the paginated list-view shape.
 
-- `GetAllBannedCertificatesAsync(string trustStoreId, ct)` → `MonoCloudResponse<List<BannedCertificate>>` (not paginated)
-- `BanTrustStoreCertificateAsync(string trustStoreId, BanTrustStoreCertificateRequest req, ct)` → `MonoCloudResponse<BannedCertificate>`
-- `UnbanTrustStoreCertificateAsync(string trustStoreId, string banId, ct)` → `MonoCloudResponse`
+Banned certificates (PKI):
 
-Trust store sources (added in 0.2.8) — the `TrustStoreSource` enum models the two backings the API recognizes for a trust store's certificate chain:
+- `GetAllPkiBannedCertificatesAsync(string trustStoreId, ct)` → `MonoCloudResponse<List<BannedCertificate>>` (not paginated)
+- `BanPkiTrustStoreCertificateAsync(string trustStoreId, BanTrustStoreCertificateRequest req, ct)` → `MonoCloudResponse<BannedCertificate>`
+- `UnbanPkiTrustStoreCertificateAsync(string trustStoreId, string banId, ct)` → `MonoCloudResponse`
 
-| `TrustStoreSource` value | Meaning |
-| --- | --- |
-| `Database` | Certificate chain uploaded directly through the API and stored alongside the trust store (the default). |
-| `S3`       | Certificate chain fetched from a customer-owned S3 object using a cross-account IAM role. |
+SPIFFE trust stores:
+
+- `GetAllSpiffeTrustStoresAsync(page=1, size=10, sort=null, ct)` → `MonoCloudResponse<List<SpiffeTrustStoreSummary>, PageModel>`
+- `CreateSpiffeTrustStoreAsync(CreateSpiffeTrustStoreRequest req, ct)` → `MonoCloudResponse<SpiffeTrustStore>`
+- `FindSpiffeTrustStoreByIdAsync(string trustStoreId, ct)` → `MonoCloudResponse<SpiffeTrustStore>`
+- `PatchSpiffeTrustStoreAsync(string trustStoreId, PatchSpiffeTrustStoreRequest req, ct)` → `MonoCloudResponse<SpiffeTrustStore>`
+- `DeleteSpiffeTrustStoreAsync(string trustStoreId, ct)` → `MonoCloudResponse`
+- `SetSpiffeTrustStoreDefaultAsync(string trustStoreId, ct)` → `MonoCloudResponse<SpiffeTrustStore>`
+
+Banned SVIDs (SPIFFE):
+
+- `GetAllSpiffeBannedSvidsAsync(string trustStoreId, ct)` → `MonoCloudResponse<List<BannedSvid>>` (not paginated)
+- `BanSpiffeTrustStoreSvidAsync(string trustStoreId, BanTrustStoreSvidRequest req, ct)` → `MonoCloudResponse<BannedSvid>`
+- `UnbanSpiffeTrustStoreSvidAsync(string trustStoreId, string banId, ct)` → `MonoCloudResponse`
+
+**Removed in 0.2.9:** the flat single-family methods `GetAllTrustStoresAsync`, `CreateTrustStoreAsync`, `FindTrustStoreByIdAsync`, `PatchTrustStoreAsync`, `DeleteTrustStoreAsync`, `SetTrustStoreDefaultAsync`, `GetAllBannedCertificatesAsync`, `BanTrustStoreCertificateAsync`, and `UnbanTrustStoreCertificateAsync` no longer exist — use the `*Pki*` / `*Spiffe*` equivalents above.
+
+Models: `PkiTrustStore` / `PkiTrustStoreSummary` / `PkiTrustStoreOptions`, `SpiffeTrustStore` / `SpiffeTrustStoreSummary` / `SpiffeTrustStoreOptions`, the `Create…`/`Patch…` `Pki`/`Spiffe` `TrustStore(Options)Request` types, `BannedCertificate`, `BannedSvid`, `BanTrustStoreCertificateRequest`, `BanTrustStoreSvidRequest`, `AddCertificateRevocationRequest`, `ICertificateRevocation` (+ `BaseCertificateRevocation` / `DeltaCertificateRevocation`), `RevocationGrouped` (+ `RevocationGroupedDelta`), and the `BundleEndpointProfile` enum (SPIFFE bundle-endpoint profile). The `TrustStoreSource` enum (`Database` / `S3`) and the S3 source models (`S3Source`, `CreateS3SourceRequest`, `PatchS3SourceRequest`, `S3SetupToken`) still ship as public types, but as of 0.2.9 they are **not wired to any trust-store method** — the PKI/SPIFFE rework dropped the source/S3 mechanism from the live API, so treat them as vestigial (the JS SDK de-exports them entirely).
 
 ## `NetworkZones` — `NetworkZonesClient`
 

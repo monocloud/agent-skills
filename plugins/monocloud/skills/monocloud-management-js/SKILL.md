@@ -1,6 +1,6 @@
 ---
 name: monocloud-management-js
-description: Use when calling the MonoCloud Management API from Node.js / TypeScript — installing or configuring `@monocloud/management`, initializing `MonoCloudManagementClient` with `domain` + `apiKey`, calling resource clients (`users`, `clients`, `groups`, `resources`, `keys`, `logs`, `options`, `branding`, `trustStores`, `networkZones`), reading paginated results via `MonoCloudPageResponse`, handling `MonoCloudException` subclasses, or troubleshooting `MONOCLOUD_MANAGEMENT_DOMAIN` / `MONOCLOUD_MANAGEMENT_API_KEY` / 401 / 403 / validation errors.
+description: Use when calling the MonoCloud Management API from Node.js / TypeScript — installing or configuring `@monocloud/management`, initializing `MonoCloudManagementClient` with `domain` + `apiKey`, calling resource clients (`users`, `clients`, `groups`, `resources`, `keys`, `logs`, `options`, `branding`, `trustStores`, `networkZones`) — including PKI/SPIFFE (mTLS) trust stores, external authenticators, and API access policies — reading paginated results via `MonoCloudPageResponse`, handling `MonoCloudException` subclasses, or troubleshooting `MONOCLOUD_MANAGEMENT_DOMAIN` / `MONOCLOUD_MANAGEMENT_API_KEY` / 401 / 403 / validation errors.
 license: MIT
 ---
 
@@ -88,7 +88,7 @@ const management = MonoCloudManagementClient.init({
 | `.networkZones` | `NetworkZonesClient` (added in 0.2.7 — IP & regional, **ScaleX**)     | `clients/network-zones-api.ts`   |
 | `.options`      | `OptionsClient` (tenant settings)                                     | `clients/options-api.ts`         |
 | `.resources`    | `ResourcesClient` (API resources, scopes, claim resources, **API access policies**) | `clients/resources-api.ts` |
-| `.trustStores`  | `TrustStoresClient`                                                   | `clients/trust-stores-api.ts`    |
+| `.trustStores`  | `TrustStoresClient` (PKI + SPIFFE / mTLS trust stores — reworked in 0.2.9) | `clients/trust-stores-api.ts`    |
 | `.users`        | `UsersClient`                                                         | `clients/users-api.ts`           |
 
 Each resource client method returns `Promise<MonoCloudResponse<T>>` (or `Promise<MonoCloudPageResponse<T>>` for paginated lists). The response object always has `.result`, `.status`, and (for paginated calls) `.pageData`.

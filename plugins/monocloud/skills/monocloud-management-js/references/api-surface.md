@@ -1,6 +1,6 @@
 # `@monocloud/management` — API surface
 
-Exhaustive export list, verified against `packages/management/src/` and `packages/core/src/` on `@monocloud/management@0.2.7`. Methods are listed verbatim with positional parameters; TypeScript intellisense (`go-to-definition`) is the source of truth for full request/response model fields.
+Exhaustive export list, verified against `packages/management/src/` and `packages/core/src/` on `@monocloud/management@0.2.9`. Methods are listed verbatim with positional parameters; TypeScript intellisense (`go-to-definition`) is the source of truth for full request/response model fields.
 
 ## Quick reference
 
@@ -47,11 +47,11 @@ import type {
 } from '@monocloud/management';
 ```
 
-All request/response models (`User`, `CreateUserRequest`, `Application`, `Group`, `ApiResource`, `Log`, `KeyMaterial`, `TrustStore`, etc.) are re-exported from the package root via `export * from './models'`. Newer models worth noting:
+All request/response models (`User`, `CreateUserRequest`, `Application`, `Group`, `ApiResource`, `Log`, `KeyMaterial`, `PkiTrustStore`, etc.) are re-exported from the package root via `export * from './models'`. Newer models worth noting:
 
 - **API access policies** (`resources.*ApiAccessPolicy*`): `ApiAccessPolicy`, `BasicApiAccessPolicy`, `AdvancedApiAccessPolicy`, `CreateApiAccessBasicPolicyRequest`, `CreateApiAccessAdvancedPolicyRequest`, `PatchApiAccessBasicPolicyRequest`, `PatchApiAccessAdvancedPolicyRequest`, `ApiAccessPolicyActions`, `CreateApiAccessPolicyActionsRequest`, `PatchApiAccessPolicyActionsRequest`, `PolicyTypes`.
 - **Network zones** (`networkZones.*`): `INetworkZone` (discriminated union by `type`), `IpNetworkZone`, `RegionalNetworkZone`, `CreateIpNetworkZoneRequest`, `CreateRegionalNetworkZoneRequest`, `PatchIpNetworkZoneRequest`, `PatchRegionalNetworkZoneRequest`, `NetworkZoneCategory`, `NetworkZoneOperator`.
-- **Trust store sources**: `TrustStoreSource` enum (`'database'` | `'s3'`).
+- **Trust stores** (`trustStores.*`): reworked in 0.2.9 into PKI + SPIFFE families — `PkiTrustStore`, `PkiTrustStoreSummary`, `PkiTrustStoreOptions`, `SpiffeTrustStore`, `SpiffeTrustStoreSummary`, `SpiffeTrustStoreOptions`, `BannedCertificate`, `BannedSvid`, `ICertificateRevocation`, `RevocationGrouped`, plus their `Create*`/`Patch*` request types. The legacy unified `TrustStore`/`TrustStoreSummary` model and the `TrustStoreSource` enum were **removed**.
 - **Application consent**: `Application` / `CreateApplicationRequest` / `PatchApplicationRequest` carry an `enable_consent: boolean` field. **Secure+ subscription required.**
 
 `MonoCloudPageResponse<T>`, `MonoCloudClientBase`, `ProblemDetails`, and `MonoCloudRequest` are part of the runtime shape (they're the return types of paginated methods, the parent of every resource client, the `.response` field on `MonoCloudRequestException`, etc.) but they aren't re-exported as named imports from `@monocloud/management`. Import them from `@monocloud/management-core` if you need to reference them directly — usually TypeScript inference from the method return types is enough.
@@ -384,7 +384,7 @@ There is no `createKey`, `findKeyById`, or `getAllKeys` — those don't exist in
 
 ## `client.options` — `OptionsClient`
 
-Tenant-wide settings. The SDK exposes `Authentication`, `Communication`, and sign-up-custom-fields options. Other option areas (recovery methods, identifier policies, per-provider external authenticator options) are **not** currently surfaced as discrete methods on this client.
+Tenant-wide settings. The SDK exposes `Authentication`, `Communication`, sign-up-custom-fields, and (as of 0.2.9) external-authenticator options. Other option areas (recovery methods, identifier policies) are **not** currently surfaced as discrete methods on this client.
 
 - `findAuthenticationOptions()` → `MonoCloudResponse<AuthenticationOptions>`
 - `patchAuthenticationOptions(req: PatchAuthenticationOptionsRequest)` → `MonoCloudResponse<AuthenticationOptions>`
@@ -395,9 +395,17 @@ Sign-up custom fields:
 
 - `getAllSignUpCustomFields()` → `MonoCloudResponse<SignUpCustomField[]>`
 - `createSignUpCustomField(req: CreateSignUpCustomFieldRequest)` → `MonoCloudResponse<SignUpCustomField>`
-- `findSignUpCustomFieldByName(claimName)` → `MonoCloudResponse<SignUpCustomField>`
+- `findSignUpCustomField(claimName)` → `MonoCloudResponse<SignUpCustomField>`
 - `patchSignUpCustomField(claimName, req: PatchSignUpCustomFieldRequest)` → `MonoCloudResponse<SignUpCustomField>`
 - `deleteSignUpCustomField(claimName)` → `MonoCloudResponse<null>`
+
+External authenticators (added in 0.2.9):
+
+- `getAllExternalAuthenticators()` → `MonoCloudResponse<ExternalAuthenticator[]>` (not paginated)
+- `createExternalAuthenticator(req: CreateExternalAuthenticatorRequest)` → `MonoCloudResponse<ExternalAuthenticator>`
+- `findExternalAuthenticator(name)` → `MonoCloudResponse<ExternalAuthenticator>`
+- `patchExternalAuthenticator(name, req: PatchExternalAuthenticatorRequest)` → `MonoCloudResponse<ExternalAuthenticator>`
+- `deleteExternalAuthenticator(name)` → `MonoCloudResponse<null>`
 
 ## `client.branding` — `BrandingClient`
 
@@ -414,36 +422,48 @@ There is no `getBranding()` / `patchBranding()` umbrella method.
 
 ## `client.trustStores` — `TrustStoresClient`
 
-mTLS trust stores, plus revocation and ban lists.
+mTLS trust stores. As of 0.2.9 the client is split into two families — **PKI** trust stores (X.509 CA chains) and **SPIFFE** trust stores (federated SPIFFE trust domains) — each with its own ban list, plus offline certificate-revocation (CRL) management on the PKI side. All list methods are paginated (`page?, size?, sort?`); the ban-list getters are not.
 
-Trust stores:
+PKI trust stores:
 
-- `getAllTrustStores(page?, size?, sort?)` → `MonoCloudPageResponse<TrustStoreSummary[]>`
-- `createTrustStore(req: CreateTrustStoreRequest)` → `MonoCloudResponse<TrustStore>`
-- `findTrustStoreById(trustStoreId)` → `MonoCloudResponse<TrustStore>`
-- `patchTrustStore(trustStoreId, req: PatchTrustStoreRequest)` → `MonoCloudResponse<TrustStore>`
-- `deleteTrustStore(trustStoreId)` → `MonoCloudResponse<null>`
-- `setTrustStoreDefault(trustStoreId)` → `MonoCloudResponse<TrustStore>`
+- `getAllPkiTrustStores(page?, size?, sort?)` → `MonoCloudPageResponse<PkiTrustStoreSummary[]>`
+- `createPkiTrustStore(req: CreatePkiTrustStoreRequest)` → `MonoCloudResponse<PkiTrustStore>`
+- `findPkiTrustStoreById(trustStoreId)` → `MonoCloudResponse<PkiTrustStore>`
+- `patchPkiTrustStore(trustStoreId, req: PatchPkiTrustStoreRequest)` → `MonoCloudResponse<PkiTrustStore>`
+- `deletePkiTrustStore(trustStoreId)` → `MonoCloudResponse<null>`
+- `setPkiTrustStoreDefault(trustStoreId)` → `MonoCloudResponse<PkiTrustStore>`
 
-Certificate revocations:
+Certificate revocations (offline CRLs — PKI only):
 
 - `getAllRevocations(trustStoreId, page?, size?, sort?)` → `MonoCloudPageResponse<RevocationGrouped[]>`
-- `addCertificateRevocation(trustStoreId, req: AddCertificateRevocationRequest)` → `MonoCloudResponse<CertificateRevocation>`
-- `findCertificateRevocation(trustStoreId, revocationId)` → `MonoCloudResponse<CertificateRevocation>`
+- `addCertificateRevocation(trustStoreId, req: AddCertificateRevocationRequest)` → `MonoCloudResponse<ICertificateRevocation>`
+- `findCertificateRevocation(trustStoreId, revocationId)` → `MonoCloudResponse<ICertificateRevocation>`
 - `removeCertificateRevocation(trustStoreId, revocationId)` → `MonoCloudResponse<null>`
 
-Banned certificates:
+PKI banned certificates:
 
-- `getAllBannedCertificates(trustStoreId)` → `MonoCloudResponse<BannedCertificate[]>` (not paginated)
-- `banTrustStoreCertificate(trustStoreId, req: BanTrustStoreCertificateRequest)` → `MonoCloudResponse<BannedCertificate>`
-- `unbanTrustStoreCertificate(trustStoreId, banId)` → `MonoCloudResponse<null>`
+- `getAllPkiBannedCertificates(trustStoreId)` → `MonoCloudResponse<BannedCertificate[]>` (not paginated)
+- `banPkiTrustStoreCertificate(trustStoreId, req: BanTrustStoreCertificateRequest)` → `MonoCloudResponse<BannedCertificate>`
+- `unbanPkiTrustStoreCertificate(trustStoreId, banId)` → `MonoCloudResponse<null>`
 
-Trust store sources (added in 0.2.7) — the API recognizes two backings for the certificate chain, exposed via the `TrustStoreSource` enum:
+SPIFFE trust stores:
 
-| `TrustStoreSource` value | Meaning |
-| --- | --- |
-| `'database'` | Certificate chain uploaded directly through the API and stored alongside the trust store (the default). |
-| `'s3'`       | Certificate chain fetched from a customer-owned S3 object using a cross-account IAM role. |
+- `getAllSpiffeTrustStores(page?, size?, sort?)` → `MonoCloudPageResponse<SpiffeTrustStoreSummary[]>`
+- `createSpiffeTrustStore(req: CreateSpiffeTrustStoreRequest)` → `MonoCloudResponse<SpiffeTrustStore>`
+- `findSpiffeTrustStoreById(trustStoreId)` → `MonoCloudResponse<SpiffeTrustStore>`
+- `patchSpiffeTrustStore(trustStoreId, req: PatchSpiffeTrustStoreRequest)` → `MonoCloudResponse<SpiffeTrustStore>`
+- `deleteSpiffeTrustStore(trustStoreId)` → `MonoCloudResponse<null>`
+- `setSpiffeTrustStoreDefault(trustStoreId)` → `MonoCloudResponse<SpiffeTrustStore>`
+
+SPIFFE banned SVIDs:
+
+- `getAllSpiffeBannedSvids(trustStoreId)` → `MonoCloudResponse<BannedSvid[]>` (not paginated)
+- `banSpiffeTrustStoreSvid(trustStoreId, req: BanTrustStoreSvidRequest)` → `MonoCloudResponse<BannedSvid>`
+- `unbanSpiffeTrustStoreSvid(trustStoreId, banId)` → `MonoCloudResponse<null>`
+
+Related models: `PkiTrustStore`, `PkiTrustStoreSummary`, `PkiTrustStoreOptions`, `SpiffeTrustStore`, `SpiffeTrustStoreSummary`, `SpiffeTrustStoreOptions`, `BannedCertificate`, `BannedSvid`, `RevocationGrouped`, and `ICertificateRevocation` — a discriminated union (`{ type: 'base' } & BaseCertificateRevocation` | `{ type: 'delta' } & DeltaCertificateRevocation`). Request types: `CreatePkiTrustStoreRequest` / `PatchPkiTrustStoreRequest` / `CreateSpiffeTrustStoreRequest` / `PatchSpiffeTrustStoreRequest` (each paired with a `*OptionsRequest`), `AddCertificateRevocationRequest`, `BanTrustStoreCertificateRequest`, `BanTrustStoreSvidRequest`.
+
+> **Removed in 0.2.9:** the unified `getAllTrustStores` / `createTrustStore` / `findTrustStoreById` / `patchTrustStore` / `deleteTrustStore` / `setTrustStoreDefault` methods, the `TrustStore` / `TrustStoreSummary` models, and the `TrustStoreSource` enum (`'database'` | `'s3'`). Use the PKI/SPIFFE-specific methods above. Revocation calls now return `ICertificateRevocation` (was `CertificateRevocation`).
 
 ## `client.networkZones` — `NetworkZonesClient`
 

@@ -1,6 +1,6 @@
 ---
 name: monocloud-management-dotnet
-description: Use when calling the MonoCloud Management API from .NET — installing or configuring the `MonoCloud.Management` NuGet package, constructing `MonoCloudManagementClient` (direct or via DI with `AddMonoCloudManagementClient`), calling resource clients (`Users`, `Clients`, `Groups`, `Resources`, `Keys`, `Logs`, `Options`, `Branding`, `TrustStores`, `NetworkZones`), reading `MonoCloudResponse<T>.Data` (and `PageData` for paginated lists), handling `MonoCloudException` subclasses, or troubleshooting `MonoCloud:Management:Domain` / `MonoCloud:Management:ApiKey` / 401 / 403 / validation errors.
+description: Use when calling the MonoCloud Management API from .NET — installing or configuring the `MonoCloud.Management` NuGet package, constructing `MonoCloudManagementClient` (direct or via DI with `AddMonoCloudManagementClient`), calling resource clients (`Users`, `Clients`, `Groups`, `Resources`, `Keys`, `Logs`, `Options`, `Branding`, `TrustStores`, `NetworkZones`) — including PKI/SPIFFE (mTLS) trust stores, external authenticators, and API access policies — reading `MonoCloudResponse<T>.Data` (and `PageData` for paginated lists), handling `MonoCloudException` subclasses, or troubleshooting `MonoCloud:Management:Domain` / `MonoCloud:Management:ApiKey` / 401 / 403 / validation errors.
 license: MIT
 ---
 
@@ -151,7 +151,7 @@ builder.Services.AddMonoCloudManagementClient(builder.Configuration, options =>
 | `.NetworkZones` | IP + regional network zones (added in 0.2.8 — **ScaleX** required)  | `NetworkZonesClient` |
 | `.Options`      | Tenant options                                                      | `OptionsClient`      |
 | `.Resources`    | API resources, scopes, claim resources, **API access policies**     | `ResourcesClient`    |
-| `.TrustStores`  | mTLS trust stores                                                   | `TrustStoresClient`  |
+| `.TrustStores`  | PKI (mTLS) + SPIFFE trust stores                                    | `TrustStoresClient`  |
 | `.Users`        | Users                                                               | `UsersClient`        |
 
 Each method on a resource client returns `Task<MonoCloudResponse<T>>` or `Task<MonoCloudResponse<T, PageModel>>` for paginated lists, plus a `CancellationToken` parameter. See [`references/api-surface.md`](references/api-surface.md) for the full method index.
