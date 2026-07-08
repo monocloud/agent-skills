@@ -1,40 +1,42 @@
 # `@monocloud/management` — API surface
 
-Exhaustive export list, verified against `packages/management/src/` and `packages/core/src/` on `@monocloud/management@0.2.9`. Methods are listed verbatim with positional parameters; TypeScript intellisense (`go-to-definition`) is the source of truth for full request/response model fields.
+Exhaustive export list, verified against `packages/management/src/` and `packages/core/src/` on `@monocloud/management@0.2.10`. Methods are listed verbatim with positional parameters; TypeScript intellisense (`go-to-definition`) is the source of truth for full request/response model fields.
 
 ## Quick reference
 
 The surface most apps actually reach for — full method lists, request types, and gotchas follow below.
 
-- Entry point: `MonoCloudManagementClient.init(options?, fetcher?)` — returns a singleton-style client.
-- Resource clients hang off it: `.users`, `.clients`, `.groups`, `.resources`, `.keys`, `.logs`, `.options`, `.branding`, `.trustStores`, `.networkZones`.
-- Most-used methods: `users.getAllUsers / createUser / findUserById / patchPrivateData / patchPublicData / patchClaims / disableUser / enableUser / changePassword`, `clients.getAllApplications / createApplication / patchApplication`, `groups.getAllGroups / createGroup`, `keys.getAllKeyMaterials`, `logs.getAllLogs`, `resources.getAllApiAccessPolicies`, `networkZones.getAllNetworkZones`.
+- Entry point: `MonoCloudManagementClient.init(options?, fetcher?)` — static factory; the constructor is `private`.
+- Ten resource clients hang off it: `.branding`, `.clients`, `.groups`, `.keys`, `.logs`, `.networkZones`, `.options`, `.resources`, `.trustStores`, `.users`.
+- Most-used methods: `users.getAllUsers / createUser / findUserById / patchClaims / patchPrivateData / patchPublicData / disableUser / enableUser / changePassword`, `clients.getAllApplications / createApplication / patchApplication`, `groups.getAllGroups / createGroup`, `keys.getAllKeyMaterials`, `logs.getAllLogs`, `resources.getAllApiResources / getAllApiAccessPolicies`, `options.findAuthenticationOptions`.
 - Response wrappers: `MonoCloudResponse<T>` (`.result`, `.status`, `.headers`) and `MonoCloudPageResponse<T>` (adds `.pageData`).
-- Errors: subclasses of `MonoCloudRequestException` — `MonoCloudNotFoundException`, `MonoCloudConflictException`, `MonoCloudIdentityValidationException`, … Base `MonoCloudException` has no `statusCode`; branch with `instanceof` or read `(e as MonoCloudRequestException).response?.status`.
-- Common gotchas: `clients.*` methods are named `*Application*` (not `*Client*`); the user identifier is `User.user_id` (not `user.id`); the SDK appends `/api/` itself — don't include it in `domain`. `PATCH` request types **no longer carry immutable identifier fields** (`audience`, `name`) — see the gotcha section below.
+- Errors: subclasses of `MonoCloudRequestException` — `MonoCloudNotFoundException`, `MonoCloudConflictException`, `MonoCloudPaymentRequiredException`, `MonoCloudIdentityValidationException`, … Base `MonoCloudException` has no status field; branch with `instanceof` or read `(e as MonoCloudRequestException).response?.status`.
+- Common gotchas: `clients.*` methods are named `*Application*` (not `*Client*`); the deserialized body is on `.result` (**not** `.data`, which is the .NET SDK's field); the SDK appends `/api/` itself — don't include it in `domain`. Some methods require a paid subscription tier and fail with HTTP 402 → `MonoCloudPaymentRequiredException` (see the tier table below).
 
 ## Top-level exports
 
-From `@monocloud/management` (re-exported through `@monocloud/management-core`):
+Everything below is re-exported from the `@monocloud/management` package root (the value exports come through `@monocloud/management-core`):
 
 ```ts
 import {
-  MonoCloudManagementClient,
-  MonoCloudResponse,
+  MonoCloudManagementClient,   // main client (value)
+  MonoCloudResponse,           // response envelope (value)
+
   // exception classes
   MonoCloudException,
   MonoCloudBadRequestException,
   MonoCloudConflictException,
-  MonoCloudForbiddenException,
   MonoCloudIdentityValidationException,
+  MonoCloudPaymentRequiredException,
+  MonoCloudForbiddenException,
   MonoCloudKeyValidationException,
   MonoCloudModelStateException,
   MonoCloudNotFoundException,
-  MonoCloudPaymentRequiredException,
   MonoCloudRequestException,
   MonoCloudResourceExhaustedException,
   MonoCloudServerException,
   MonoCloudUnauthorizedException,
+
   // problem-detail value objects
   IdentityValidationProblemDetails,
   KeyValidationProblemDetails,
@@ -47,18 +49,20 @@ import type {
 } from '@monocloud/management';
 ```
 
-All request/response models (`User`, `CreateUserRequest`, `Application`, `Group`, `ApiResource`, `Log`, `KeyMaterial`, `PkiTrustStore`, etc.) are re-exported from the package root via `export * from './models'`. Newer models worth noting:
+`export * from './clients'` re-exports all ten resource-client classes: `BrandingClient`, `ClientsClient`, `GroupsClient`, `KeysClient`, `LogsClient`, `NetworkZonesClient`, `OptionsClient`, `ResourcesClient`, `TrustStoresClient`, `UsersClient`.
+
+`export * from './models'` re-exports every request/response model, type, and enum (`User`, `CreateUserRequest`, `Application`, `Group`, `ApiResource`, `Log`, `KeyMaterial`, `PkiTrustStore`, `IpNetworkZone`, `SignUpCustomField`, `AuthenticationOptions`, etc.). Notable groups:
 
 - **API access policies** (`resources.*ApiAccessPolicy*`): `ApiAccessPolicy`, `BasicApiAccessPolicy`, `AdvancedApiAccessPolicy`, `CreateApiAccessBasicPolicyRequest`, `CreateApiAccessAdvancedPolicyRequest`, `PatchApiAccessBasicPolicyRequest`, `PatchApiAccessAdvancedPolicyRequest`, `ApiAccessPolicyActions`, `CreateApiAccessPolicyActionsRequest`, `PatchApiAccessPolicyActionsRequest`, `PolicyTypes`.
 - **Network zones** (`networkZones.*`): `INetworkZone` (discriminated union by `type`), `IpNetworkZone`, `RegionalNetworkZone`, `CreateIpNetworkZoneRequest`, `CreateRegionalNetworkZoneRequest`, `PatchIpNetworkZoneRequest`, `PatchRegionalNetworkZoneRequest`, `NetworkZoneCategory`, `NetworkZoneOperator`.
-- **Trust stores** (`trustStores.*`): reworked in 0.2.9 into PKI + SPIFFE families — `PkiTrustStore`, `PkiTrustStoreSummary`, `PkiTrustStoreOptions`, `SpiffeTrustStore`, `SpiffeTrustStoreSummary`, `SpiffeTrustStoreOptions`, `BannedCertificate`, `BannedSvid`, `ICertificateRevocation`, `RevocationGrouped`, plus their `Create*`/`Patch*` request types. The legacy unified `TrustStore`/`TrustStoreSummary` model and the `TrustStoreSource` enum were **removed**.
-- **Application consent**: `Application` / `CreateApplicationRequest` / `PatchApplicationRequest` carry an `enable_consent: boolean` field. **Secure+ subscription required.**
+- **Trust stores** (`trustStores.*`): PKI + SPIFFE families — `PkiTrustStore`, `PkiTrustStoreSummary`, `PkiTrustStoreOptions`, `SpiffeTrustStore`, `SpiffeTrustStoreSummary`, `SpiffeTrustStoreOptions`, `BannedCertificate`, `BannedCertificateType`, `BannedSvid`, `ICertificateRevocation` (union of `BaseCertificateRevocation` / `DeltaCertificateRevocation`), `RevocationGrouped`, `RevocationGroupedDelta`, `RevocationCheckDepth`, `X509RevocationMode`, plus their `Create*`/`Patch*` request types.
+- **Grants / tokens** (`users.*`): `ReferenceToken`, `RefreshToken` (+ `RefreshTokenExpirationTypes`, `RefreshTokenUsageTypes`), `AuthorizationCode`, `UserConsent`, `UserClientGrants`, `AccessTokenTypes`.
 
-`MonoCloudPageResponse<T>`, `MonoCloudClientBase`, `ProblemDetails`, and `MonoCloudRequest` are part of the runtime shape (they're the return types of paginated methods, the parent of every resource client, the `.response` field on `MonoCloudRequestException`, etc.) but they aren't re-exported as named imports from `@monocloud/management`. Import them from `@monocloud/management-core` if you need to reference them directly — usually TypeScript inference from the method return types is enough.
+Not re-exported from the `@monocloud/management` root (they live in `@monocloud/management-core`): `MonoCloudPageResponse`, `PageModel`, `ProblemDetails`, `MonoCloudRequest`, `MonoCloudClientBase`. They are part of the runtime shape — `MonoCloudPageResponse<T>` is the return type of every paginated method, `PageModel` is its `.pageData`, `ProblemDetails` is the `.response` on `MonoCloudRequestException` — but a named import of them from the main package will fail. Rely on TypeScript inference from the method return types, or import them from `@monocloud/management-core` if you need to name them directly.
 
 ## `MonoCloudManagementClient`
 
-Created via the static factory `MonoCloudManagementClient.init()`. The constructor is `private`.
+Created via the static factory `MonoCloudManagementClient.init()`. The constructor is `private` — never `new MonoCloudManagementClient()`.
 
 ```ts
 class MonoCloudManagementClient {
@@ -67,7 +71,7 @@ class MonoCloudManagementClient {
   readonly groups: GroupsClient;
   readonly keys: KeysClient;
   readonly logs: LogsClient;
-  readonly networkZones: NetworkZonesClient;   // added in 0.2.7
+  readonly networkZones: NetworkZonesClient;
   readonly options: OptionsClient;
   readonly resources: ResourcesClient;
   readonly trustStores: TrustStoresClient;
@@ -80,10 +84,10 @@ class MonoCloudManagementClient {
 }
 ```
 
-- `options.domain` — tenant URL; falls back to `process.env.MONOCLOUD_MANAGEMENT_DOMAIN`. The base client appends `/api/` automatically.
+- `options.domain` — tenant URL; falls back to `process.env.MONOCLOUD_MANAGEMENT_DOMAIN`. The SDK sanitizes it (prepends `https://` if missing, strips a trailing `/`) and appends `/api/` automatically — do **not** include `/api` yourself.
 - `options.apiKey` — Management API key; falls back to `process.env.MONOCLOUD_MANAGEMENT_API_KEY`. Sent as the `X-API-KEY` header.
-- `options.config.timeout` — per-request timeout in **milliseconds**; falls back to `MONOCLOUD_MANAGEMENT_TIMEOUT` (parsed as integer). Default: `10000`.
-- `fetcher` — optional `Fetcher` to replace the built-in `fetch` implementation. When provided, the SDK does **not** add the API-key or base-URL headers itself — you own that wiring.
+- `options.config.timeout` — per-request timeout in **milliseconds**; falls back to `MONOCLOUD_MANAGEMENT_TIMEOUT` (parsed with `parseInt(…, 10)`, applied only when a positive integer). Default: `10000`.
+- `fetcher` — optional `Fetcher` to replace the built-in `fetch` pipeline. When provided, the SDK does **not** add the base URL (`/api/`), the `X-API-KEY` / `Content-Type` headers, or the timeout `AbortSignal` — your fetcher owns all of that.
 
 ```ts
 type Fetcher = (input: string | URL, init?: RequestInit) => Promise<Response>;
@@ -91,9 +95,11 @@ type Fetcher = (input: string | URL, init?: RequestInit) => Promise<Response>;
 interface MonoCloudConfig {
   domain: string;
   apiKey: string;
-  config?: { timeout?: number };
+  config?: { timeout?: number };   // timeout in milliseconds
 }
 ```
+
+Both `init()` arguments are optional; with no `options` the client is built entirely from the env-var fallbacks. `init()`'s timeout-from-env wiring is quirky — for reliable results pass `config.timeout` explicitly in `options`.
 
 ## Response envelopes
 
@@ -101,11 +107,13 @@ interface MonoCloudConfig {
 class MonoCloudResponse<TResult = unknown> {
   status: number;
   headers: Record<string, any>;
-  result: TResult;
+  result: TResult;                 // deserialized body — NOT `.data`
+  constructor(status: number, headers: Record<string, any>, result: TResult);
 }
 
 class MonoCloudPageResponse<TResult = unknown> extends MonoCloudResponse<TResult> {
-  pageData: PageModel;     // always present on paginated calls (not optional)
+  pageData: PageModel;             // present on every paginated call
+  constructor(status, headers, result, pageData);
 }
 
 interface PageModel {
@@ -117,48 +125,54 @@ interface PageModel {
 }
 ```
 
-Pagination metadata comes from the response's `X-Pagination` header. When the header is missing, `pageData` is populated with zeros / `false`.
+- The body of every non-list call is on `.result`. (The .NET SDK uses `.Data` / `.PageData` — do not confuse the two.)
+- Paginated `getAll*` methods return `MonoCloudPageResponse<T[]>`; `pageData` is populated from the JSON in the `x-pagination` response header. `MonoCloudPageResponse` and `PageModel` are **not** re-exported from the main package root (see [Top-level exports](#top-level-exports)) — annotate via the method return type.
+- Empty / no-content responses (e.g. every `delete*`) resolve to `MonoCloudResponse<null>` with `result === null`.
 
 ## Exception hierarchy
 
+Thrown on non-2xx responses (and for config/timeout failures). All extend the native `Error`.
+
 ```ts
-class MonoCloudException extends Error {}
+class MonoCloudException extends Error {}   // base: config errors, timeouts, unmapped statuses
 
 class MonoCloudRequestException extends MonoCloudException {
-  response?: ProblemDetails;       // populated when the server returns application/problem+json
+  response?: ProblemDetails;                // server problem+json body, when present
 }
 
-class MonoCloudBadRequestException        extends MonoCloudRequestException {}   // 400
-class MonoCloudUnauthorizedException      extends MonoCloudRequestException {}   // 401
-class MonoCloudPaymentRequiredException   extends MonoCloudRequestException {}   // 402
-class MonoCloudForbiddenException         extends MonoCloudRequestException {}   // 403
-class MonoCloudNotFoundException          extends MonoCloudRequestException {}   // 404
-class MonoCloudConflictException          extends MonoCloudRequestException {}   // 409
+class MonoCloudBadRequestException         extends MonoCloudRequestException {}  // 400
+class MonoCloudUnauthorizedException       extends MonoCloudRequestException {}  // 401 (bad/missing API key)
+class MonoCloudPaymentRequiredException    extends MonoCloudRequestException {}  // 402 (feature needs a higher tier)
+class MonoCloudForbiddenException          extends MonoCloudRequestException {}  // 403
+class MonoCloudNotFoundException           extends MonoCloudRequestException {}  // 404
+class MonoCloudConflictException           extends MonoCloudRequestException {}  // 409
+class MonoCloudModelStateException         extends MonoCloudRequestException {}  // 422 (generic validation)
 class MonoCloudIdentityValidationException extends MonoCloudRequestException {
-  errors: IdentityError[];         // 422 with type=identity-validation-error
+  errors: IdentityError[];                  // 422, type=…#identity-validation-error
 }
-class MonoCloudKeyValidationException     extends MonoCloudRequestException {
-  errors: Record<string, string[]>;// 422 with type=validation-error
+class MonoCloudKeyValidationException      extends MonoCloudRequestException {
+  errors: Record<string, string[]>;         // 422, type=…#validation-error
 }
-class MonoCloudModelStateException        extends MonoCloudRequestException {}   // 422 (other)
-class MonoCloudResourceExhaustedException extends MonoCloudRequestException {}   // 429
-class MonoCloudServerException            extends MonoCloudRequestException {}   // 5xx
+class MonoCloudResourceExhaustedException  extends MonoCloudRequestException {}  // 429 (rate limited)
+class MonoCloudServerException             extends MonoCloudRequestException {}  // 500
 ```
 
-`MonoCloudException` itself only has `.message` (inherited from `Error`). To branch on status, use `instanceof` against the specific subclass — there is no `statusCode` property to read.
-
-To read the original problem-details payload (when present), use `.response`:
+`MonoCloudException` itself only has `.message` (inherited from `Error`) — there is no `statusCode` property. Branch with `instanceof` against the specific subclass, or read the status off the problem-details body:
 
 ```ts
 catch (e) {
-  if (e instanceof MonoCloudRequestException) {
+  if (e instanceof MonoCloudPaymentRequiredException) {
+    // feature requires a higher subscription tier
+  } else if (e instanceof MonoCloudRequestException) {
     console.log(e.response?.status, e.response?.title, e.response?.detail);
   }
 }
 ```
 
+A request that times out surfaces as a plain `MonoCloudException` (there is no dedicated timeout class); the original error's `name === 'TimeoutError'`.
+
 ```ts
-class ProblemDetails {
+class ProblemDetails {          // core-only; not re-exported from the main package
   type: string;
   title: string;
   status: number;
@@ -170,12 +184,11 @@ class ProblemDetails {
 class IdentityValidationProblemDetails extends ProblemDetails {
   errors: IdentityError[];
 }
-
 class KeyValidationProblemDetails extends ProblemDetails {
   errors: Record<string, string[]>;
 }
 
-class IdentityError {
+interface IdentityError {
   code: string;
   description: string;
 }
@@ -183,296 +196,287 @@ class IdentityError {
 
 ## `client.users` — `UsersClient`
 
-User lifecycle and identifiers.
+Full user lifecycle: CRUD, enable/disable/unblock, identifiers, passkeys/passwords, claims, data, blocked IPs, sessions, external authenticators, group membership, and grants/tokens.
 
 | Method | Returns |
 |---|---|
 | `getAllUsers(page?, size?, filter?, sort?)` | `MonoCloudPageResponse<UserSummary[]>` |
-| `createUser(req: CreateUserRequest)` | `MonoCloudResponse<User>` |
-| `findUserById(userId)` | `MonoCloudResponse<User>` |
-| `deleteUser(userId)` | `MonoCloudResponse<null>` |
-| `enableUser(userId)` | `MonoCloudResponse<User>` |
-| `disableUser(userId, req: DisableUserRequest)` | `MonoCloudResponse<User>` |
-| `unblockUser(userId)` | `MonoCloudResponse<User>` |
-| `updateUsername(userId, req: UpdateUsernameRequest)` | `MonoCloudResponse<User>` |
-| `removeUsername(userId)` | `MonoCloudResponse<User>` |
+| `createUser(createUserRequest: CreateUserRequest)` | `MonoCloudResponse<User>` |
+| `findUserById(userId: string)` | `MonoCloudResponse<User>` |
+| `deleteUser(userId: string)` | `MonoCloudResponse<null>` |
+| `enableUser(userId: string)` | `MonoCloudResponse<User>` |
+| `disableUser(userId: string, disableUserRequest: DisableUserRequest)` | `MonoCloudResponse<User>` |
+| `unblockUser(userId: string)` | `MonoCloudResponse<User>` |
+| `updateUsername(userId: string, updateUsernameRequest: UpdateUsernameRequest)` | `MonoCloudResponse<User>` |
+| `removeUsername(userId: string)` | `MonoCloudResponse<User>` |
 
 Emails:
 
-- `addEmail(userId, req: AddEmailRequest)` → `MonoCloudResponse<User>`
-- `removeEmail(userId, identifierId)` → `MonoCloudResponse<User>`
-- `setPrimaryEmail(userId, identifierId)` → `MonoCloudResponse<User>`
-- `setEmailVerified(userId, identifierId)` → `MonoCloudResponse<User>`
-- `setEmailUnverified(userId, identifierId)` → `MonoCloudResponse<User>`
-- `verifyEmail(userId, identifierId, req: VerifyEmailRequest)` → `MonoCloudResponse<VerifyEmailResponse>`
+- `addEmail(userId: string, addEmailRequest: AddEmailRequest)` → `MonoCloudResponse<User>`
+- `removeEmail(userId: string, identifierId: string)` → `MonoCloudResponse<User>`
+- `setPrimaryEmail(userId: string, identifierId: string)` → `MonoCloudResponse<User>`
+- `setEmailVerified(userId: string, identifierId: string)` → `MonoCloudResponse<User>`
+- `setEmailUnverified(userId: string, identifierId: string)` → `MonoCloudResponse<User>`
+- `verifyEmail(userId: string, identifierId: string, verifyEmailRequest: VerifyEmailRequest)` → `MonoCloudResponse<VerifyEmailResponse>`
 
 Phones:
 
-- `addPhone(userId, req: AddPhoneRequest)` → `MonoCloudResponse<User>`
-- `removePhone(userId, identifierId)` → `MonoCloudResponse<User>`
-- `setPrimaryPhone(userId, identifierId)` → `MonoCloudResponse<User>`
-- `setPhoneVerified(userId, identifierId)` → `MonoCloudResponse<User>`
-- `setPhoneUnverified(userId, identifierId)` → `MonoCloudResponse<User>`
+- `addPhone(userId: string, addPhoneRequest: AddPhoneRequest)` → `MonoCloudResponse<User>`
+- `removePhone(userId: string, identifierId: string)` → `MonoCloudResponse<User>`
+- `setPrimaryPhone(userId: string, identifierId: string)` → `MonoCloudResponse<User>`
+- `setPhoneVerified(userId: string, identifierId: string)` → `MonoCloudResponse<User>`
+- `setPhoneUnverified(userId: string, identifierId: string)` → `MonoCloudResponse<User>`
 
 Passkeys / passwords:
 
-- `removePasskey(userId, passkeyId)` → `MonoCloudResponse<null>`
-- `setPassword(userId, req: SetPasswordRequest)` → `MonoCloudResponse<User>`
-- `removePassword(userId)` → `MonoCloudResponse<null>`
-- `setPasswordResetRequired(userId)` → `MonoCloudResponse<User>`
-- `removePasswordResetRequired(userId)` → `MonoCloudResponse<User>`
-- `resetPassword(userId, req: ResetPasswordRequest)` → `MonoCloudResponse<ResetPasswordResponse>`
-- `changePassword(userId, req: ChangePasswordRequest)` → `MonoCloudResponse<User>`
+- `removePasskey(userId: string, passkeyId: string)` → `MonoCloudResponse<null>`
+- `setPassword(userId: string, setPasswordRequest: SetPasswordRequest)` → `MonoCloudResponse<User>`
+- `removePassword(userId: string)` → `MonoCloudResponse<null>`
+- `setPasswordResetRequired(userId: string)` → `MonoCloudResponse<User>`
+- `removePasswordResetRequired(userId: string)` → `MonoCloudResponse<User>`
+- `resetPassword(userId: string, resetPasswordRequest: ResetPasswordRequest)` → `MonoCloudResponse<ResetPasswordResponse>`
+- `changePassword(userId: string, changePasswordRequest: ChangePasswordRequest)` → `MonoCloudResponse<User>`
 
 Claims / public / private data:
 
-- `patchClaims(userId, req: UpdateClaimsRequest)` → `MonoCloudResponse<User>`
-- `getPrivateData(userId)` → `MonoCloudResponse<UserPrivateData>`
-- `patchPrivateData(userId, req: UpdatePrivateDataRequest)` → `MonoCloudResponse<UserPrivateData>`
-- `getPublicData(userId)` → `MonoCloudResponse<UserPublicData>`
-- `patchPublicData(userId, req: UpdatePublicDataRequest)` → `MonoCloudResponse<UserPublicData>`
+- `patchClaims(userId: string, updateClaimsRequest: UpdateClaimsRequest)` → `MonoCloudResponse<User>`
+- `getPrivateData(userId: string)` → `MonoCloudResponse<UserPrivateData>`
+- `patchPrivateData(userId: string, updatePrivateDataRequest: UpdatePrivateDataRequest)` → `MonoCloudResponse<UserPrivateData>`
+- `getPublicData(userId: string)` → `MonoCloudResponse<UserPublicData>`
+- `patchPublicData(userId: string, updatePublicDataRequest: UpdatePublicDataRequest)` → `MonoCloudResponse<UserPublicData>`
 
 IP access:
 
-- `getAllBlockedIps(userId, page?, size?, filter?, sort?)` → `MonoCloudPageResponse<UserIpAccessDetails[]>`
-- `unblockIp(userId, req: UnblockIpRequest)` → `MonoCloudResponse<User>`
+- `getAllBlockedIps(userId: string, page?, size?, filter?, sort?)` → `MonoCloudPageResponse<UserIpAccessDetails[]>`
+- `unblockIp(userId: string, unblockIpRequest: UnblockIpRequest)` → `MonoCloudResponse<User>`
 
-Sessions:
+Sessions — **Pro plan**:
 
-- `getAllUserSessions(userId, page?, size?, clientId?, sort?)` → `MonoCloudPageResponse<UserSession[]>`
-- `findUserSession(userId, sessionId)` → `MonoCloudResponse<UserSession>`
-- `revokeUserSession(userId, sessionId)` → `MonoCloudResponse<null>`
+- `getAllUserSessions(userId: string, page?, size?, clientId?, sort?)` → `MonoCloudPageResponse<UserSession[]>`
+- `findUserSession(userId: string, sessionId: string)` → `MonoCloudResponse<UserSession>`
+- `revokeUserSession(userId: string, sessionId: string)` → `MonoCloudResponse<null>`
 
 External authenticators:
 
-- `externalAuthenticatorDisconnect(userId, req: ExternalAuthenticatorDisconnectRequest)` → `MonoCloudResponse<User>` — `req.authenticator` is an `ExternalAuthenticators` enum value.
+- `externalAuthenticatorDisconnect(userId: string, externalAuthenticatorDisconnectRequest: ExternalAuthenticatorDisconnectRequest)` → `MonoCloudResponse<User>`
 
 Groups (membership lives on the user, not the group):
 
-- `getAllUserGroups(userId, page?, size?, sort?)` → `MonoCloudPageResponse<UserGroup[]>`
-- `findUserGroup(userId, groupId)` → `MonoCloudResponse<UserGroup>`
-- `assignUserToGroup(userId, groupId)` → `MonoCloudResponse<UserGroup>`
-- `removeUserFromGroup(userId, groupId)` → `MonoCloudResponse<null>`
-- `getAllGroupAssignedUsers(groupId, page?, size?, filter?, sort?)` → `MonoCloudPageResponse<UserSummary[]>` — group-side view.
+- `getAllUserGroups(userId: string, page?, size?, sort?)` → `MonoCloudPageResponse<UserGroup[]>`
+- `findUserGroup(userId: string, groupId: string)` → `MonoCloudResponse<UserGroup>`
+- `assignUserToGroup(userId: string, groupId: string)` → `MonoCloudResponse<UserGroup>`
+- `removeUserFromGroup(userId: string, groupId: string)` → `MonoCloudResponse<null>`
+- `getAllGroupAssignedUsers(groupId: string, page?, size?, filter?, sort?)` → `MonoCloudPageResponse<UserSummary[]>` — group-side view.
 
 Grants, consents, tokens, codes:
 
-- `getAllUserClientGrants(userId, page?, size?)` → `MonoCloudPageResponse<UserClientGrants[]>`
-- `getAllUserConsents(userId, page?, size?, clientId?, sort?)` → `MonoCloudPageResponse<UserConsent[]>`
-- `getAllReferenceTokens(userId, page?, size?, clientId?, sessionId?, sort?)` → `MonoCloudPageResponse<ReferenceToken[]>`
-- `getAllRefreshTokens(userId, page?, size?, clientId?, sessionId?, sort?)` → `MonoCloudPageResponse<RefreshToken[]>`
-- `getAllAuthorizationCodes(userId, page?, size?, clientId?, sessionId?, sort?)` → `MonoCloudPageResponse<AuthorizationCode[]>`
-- `revokeUserClientGrants(userId, clientId)` → `MonoCloudResponse<null>`
-- `revokeUserConsent(userId, consentId)` → `MonoCloudResponse<null>`
-- `revokeReferenceToken(userId, tokenId)` → `MonoCloudResponse<null>`
-- `revokeRefreshToken(userId, tokenId)` → `MonoCloudResponse<null>`
-- `revokeAuthorizationCode(userId, codeId)` → `MonoCloudResponse<null>`
+- `getAllUserClientGrants(userId: string, page?, size?)` → `MonoCloudPageResponse<UserClientGrants[]>` — **Pro plan**
+- `getAllUserConsents(userId: string, page?, size?, clientId?, sort?)` → `MonoCloudPageResponse<UserConsent[]>` — **Secure+**
+- `getAllReferenceTokens(userId: string, page?, size?, clientId?, sessionId?, sort?)` → `MonoCloudPageResponse<ReferenceToken[]>` — **Secure+**
+- `getAllRefreshTokens(userId: string, page?, size?, clientId?, sessionId?, sort?)` → `MonoCloudPageResponse<RefreshToken[]>` — **Secure+**
+- `getAllAuthorizationCodes(userId: string, page?, size?, clientId?, sessionId?, sort?)` → `MonoCloudPageResponse<AuthorizationCode[]>` — **Secure+**
+- `revokeUserClientGrants(userId: string, clientId: string)` → `MonoCloudResponse<null>` — **Secure+**
+- `revokeUserConsent(userId: string, consentId: string)` → `MonoCloudResponse<null>` — **Secure+**
+- `revokeReferenceToken(userId: string, tokenId: string)` → `MonoCloudResponse<null>` — **Secure+**
+- `revokeRefreshToken(userId: string, tokenId: string)` → `MonoCloudResponse<null>` — **Secure+**
+- `revokeAuthorizationCode(userId: string, codeId: string)` → `MonoCloudResponse<null>` — **Secure+**
 
-> `User.user_id` is the identifier field on the response model — not `user.id`.
+> The identifier field on the response model is `User.user_id` (not `user.id`).
 
 ## `client.clients` — `ClientsClient`
 
-OAuth applications. The property is named `clients`, but the underlying REST resource is `applications` and the SDK method names follow the resource name.
+OAuth applications and their secrets / group assignments. The accessor is `clients`, but the underlying REST resource is `applications` and every model + method uses **`Application`** (`getAllApplications`, `createApplication`, `Application`, `PatchApplicationRequest`). The path param is still `clientId`.
 
 | Method | Returns |
 |---|---|
 | `getAllApplications(page?, size?, filter?, sort?)` | `MonoCloudPageResponse<Application[]>` |
-| `createApplication(req: CreateApplicationRequest)` | `MonoCloudResponse<Application>` |
-| `findApplicationById(clientId)` | `MonoCloudResponse<Application>` |
-| `patchApplication(clientId, req: PatchApplicationRequest)` | `MonoCloudResponse<Application>` |
-| `deleteApplication(clientId)` | `MonoCloudResponse<null>` |
+| `createApplication(createApplicationRequest: CreateApplicationRequest)` | `MonoCloudResponse<Application>` |
+| `findApplicationById(clientId: string)` | `MonoCloudResponse<Application>` |
+| `patchApplication(clientId: string, patchApplicationRequest: PatchApplicationRequest)` | `MonoCloudResponse<Application>` |
+| `deleteApplication(clientId: string)` | `MonoCloudResponse<null>` |
 
 Application secrets:
 
-- `getAllApplicationSecrets(clientId)` → `MonoCloudResponse<Secret[]>` (not paginated)
-- `createApplicationSecret(clientId, req: CreateSecretRequest)` → `MonoCloudResponse<Secret>`
-- `findApplicationSecretById(clientId, secretId)` → `MonoCloudResponse<Secret>`
-- `deleteApplicationSecret(clientId, secretId)` → `MonoCloudResponse<null>`
+- `getAllApplicationSecrets(clientId: string)` → `MonoCloudResponse<Secret[]>` — **not paginated**
+- `createApplicationSecret(clientId: string, createSecretRequest: CreateSecretRequest)` → `MonoCloudResponse<Secret>`
+- `findApplicationSecretById(clientId: string, secretId: string)` → `MonoCloudResponse<Secret>`
+- `deleteApplicationSecret(clientId: string, secretId: string)` → `MonoCloudResponse<null>`
 
 Application ↔ group mapping:
 
-- `getAllApplicationGroups(clientId, page?, size?, sort?)` → `MonoCloudPageResponse<ApplicationGroup[]>`
-- `findApplicationGroup(clientId, groupId)` → `MonoCloudResponse<ApplicationGroup>`
-- `assignGroupToApplication(clientId, groupId)` → `MonoCloudResponse<null>`
-- `removeGroupFromApplication(clientId, groupId)` → `MonoCloudResponse<null>`
-- `getAllGroupAssignedApplications(groupId, page?, size?, filter?, sort?)` → `MonoCloudPageResponse<Application[]>`
+- `getAllApplicationGroups(clientId: string, page?, size?, sort?)` → `MonoCloudPageResponse<ApplicationGroup[]>`
+- `findApplicationGroup(clientId: string, groupId: string)` → `MonoCloudResponse<ApplicationGroup>`
+- `assignGroupToApplication(clientId: string, groupId: string)` → `MonoCloudResponse<null>` — **ScaleX**
+- `removeGroupFromApplication(clientId: string, groupId: string)` → `MonoCloudResponse<null>` — **ScaleX**
+- `getAllGroupAssignedApplications(groupId: string, page?, size?, filter?, sort?)` → `MonoCloudPageResponse<Application[]>`
 
 ## `client.groups` — `GroupsClient`
 
 | Method | Returns |
 |---|---|
 | `getAllGroups(page?, size?, filter?, sort?)` | `MonoCloudPageResponse<Group[]>` |
-| `createGroup(req: CreateGroupRequest)` | `MonoCloudResponse<Group>` |
-| `findGroupById(groupId)` | `MonoCloudResponse<Group>` |
-| `patchGroup(groupId, req: PatchGroupRequest)` | `MonoCloudResponse<Group>` |
-| `deleteGroup(groupId)` | `MonoCloudResponse<null>` |
+| `createGroup(createGroupRequest: CreateGroupRequest)` | `MonoCloudResponse<Group>` — creating **more than two groups** requires the **Pro plan** |
+| `findGroupById(groupId: string)` | `MonoCloudResponse<Group>` |
+| `patchGroup(groupId: string, patchGroupRequest: PatchGroupRequest)` | `MonoCloudResponse<Group>` |
+| `deleteGroup(groupId: string)` | `MonoCloudResponse<null>` |
 
-Group membership is managed from the **user** side (`users.assignUserToGroup` / `users.removeUserFromGroup`) and queried from either side (`users.getAllUserGroups` / `users.getAllGroupAssignedUsers`). There are no `addGroupMember` / `removeGroupMember` methods on `GroupsClient`.
+Group membership is managed from the **user** side (`users.assignUserToGroup` / `users.removeUserFromGroup`) and queried from either side (`users.getAllUserGroups` / `users.getAllGroupAssignedUsers`). There are no member-management methods on `GroupsClient`.
+
+## `client.keys` — `KeysClient`
+
+Signing key materials are managed by the platform — only enumeration, rotation, and revocation are exposed.
+
+- `getAllKeyMaterials(page?, size?)` → `MonoCloudPageResponse<KeyMaterial[]>`
+- `rotateKey(keyId: string)` → `MonoCloudResponse<null>`
+- `revokeKey(keyId: string)` → `MonoCloudResponse<null>`
+
+There is no `createKey`, `findKeyById`, or `getAllKeys`.
+
+## `client.logs` — `LogsClient`
+
+Tenant audit / event logs (read-only).
+
+- `getAllLogs(page?, size?, filter?, sort?)` → `MonoCloudPageResponse<Log[]>`
+- `findLogById(logId: string)` → `MonoCloudResponse<Log>`
+
+## `client.options` — `OptionsClient`
+
+Tenant-wide authentication & communication options, plus sign-up custom fields.
+
+- `findAuthenticationOptions()` → `MonoCloudResponse<AuthenticationOptions>`
+- `patchAuthenticationOptions(patchAuthenticationOptionsRequest: PatchAuthenticationOptionsRequest)` → `MonoCloudResponse<AuthenticationOptions>`
+- `findCommunicationOptions()` → `MonoCloudResponse<CommunicationOptions>`
+- `patchCommunicationOptions(patchCommunicationOptionsRequest: PatchCommunicationOptionsRequest)` → `MonoCloudResponse<CommunicationOptions>`
+
+Sign-up custom fields:
+
+- `getAllSignUpCustomFields()` → `MonoCloudResponse<SignUpCustomField[]>` — **not paginated** (returns `MonoCloudResponse`, not `MonoCloudPageResponse`)
+- `createSignUpCustomField(createSignUpCustomFieldRequest: CreateSignUpCustomFieldRequest)` → `MonoCloudResponse<SignUpCustomField>`
+- `findSignUpCustomFieldByName(claimName: string)` → `MonoCloudResponse<SignUpCustomField>`
+- `patchSignUpCustomField(claimName: string, patchSignUpCustomFieldRequest: PatchSignUpCustomFieldRequest)` → `MonoCloudResponse<SignUpCustomField>`
+- `deleteSignUpCustomField(claimName: string)` → `MonoCloudResponse<null>`
+
+`AuthenticationOptions` and `CommunicationOptions` are deep, nested models (authenticators, identifiers, password policy, session policy, sign-up, logout, email/SMS providers, …). Many of their sub-options are subscription-gated at the field level — see the [Subscription tiers](#subscription-tiers) note. There are no discrete methods for those sub-areas; you read/patch them through the two `*Options` models. Note this release exposes **no** external-authenticator CRUD methods on `OptionsClient`.
+
+## `client.branding` — `BrandingClient`
+
+Server-rendered login-UI and notification-template branding. Three surfaces, each with `find* / patch*`:
+
+- `findPageBrandingOptions()` → `MonoCloudResponse<PageBrandingOptions>`
+- `patchPageBrandingOptions(patchPageBrandingOptionsRequest: PatchPageBrandingOptionsRequest)` → `MonoCloudResponse<PageBrandingOptions>`
+- `findEmailBrandingOptions()` → `MonoCloudResponse<EmailBrandingOptions>`
+- `patchEmailBrandingOptions(patchEmailBrandingOptionsRequest: PatchEmailBrandingOptionsRequest)` → `MonoCloudResponse<EmailBrandingOptions>`
+- `findSmsBrandingOptions()` → `MonoCloudResponse<SmsBrandingOptions>`
+- `patchSmsBrandingOptions(patchSmsBrandingOptionsRequest: PatchSmsBrandingOptionsRequest)` → `MonoCloudResponse<SmsBrandingOptions>`
+
+There is no `getBranding()` / `patchBranding()` umbrella method.
 
 ## `client.resources` — `ResourcesClient`
 
-API resources (audiences), API scopes, scope claims, claim resources.
+API resources (audiences) + their secrets & scopes, API access policies (basic/advanced), standalone identity scopes, and claim resources.
 
 API resources:
 
 - `getAllApiResources(page?, size?, filter?, sort?)` → `MonoCloudPageResponse<ApiResource[]>`
-- `createApiResource(req: CreateApiResourceRequest)` → `MonoCloudResponse<ApiResource>`
-- `findApiResourceById(apiId)` → `MonoCloudResponse<ApiResource>`
-- `patchApiResource(apiId, req: PatchApiResourceRequest)` → `MonoCloudResponse<ApiResource>` — **`audience` is immutable**; it is no longer part of `PatchApiResourceRequest`.
-- `deleteApiResource(apiId)` → `MonoCloudResponse<null>`
+- `createApiResource(createApiResourceRequest: CreateApiResourceRequest)` → `MonoCloudResponse<ApiResource>`
+- `findApiResourceById(apiId: string)` → `MonoCloudResponse<ApiResource>`
+- `patchApiResource(apiId: string, patchApiResourceRequest: PatchApiResourceRequest)` → `MonoCloudResponse<ApiResource>`
+- `deleteApiResource(apiId: string)` → `MonoCloudResponse<null>`
 
 API resource secrets:
 
-- `getAllApiResourceSecrets(apiId)` → `MonoCloudResponse<Secret[]>` (not paginated)
-- `createApiResourceSecret(apiId, req: CreateSecretRequest)` → `MonoCloudResponse<Secret>`
-- `findApiResourceSecretById(secretId, apiId)` → `MonoCloudResponse<Secret>`
-- `deleteApiResourceSecret(apiId, secretId)` → `MonoCloudResponse<null>`
+- `getAllApiResourceSecrets(apiId: string)` → `MonoCloudResponse<Secret[]>` — **not paginated**
+- `createApiResourceSecret(apiId: string, createSecretRequest: CreateSecretRequest)` → `MonoCloudResponse<Secret>` — **ScaleX**
+- `findApiResourceSecretById(secretId: string, apiId: string)` → `MonoCloudResponse<Secret>` — **param order: `secretId` then `apiId`**
+- `deleteApiResourceSecret(apiId: string, secretId: string)` → `MonoCloudResponse<null>` — **param order: `apiId` then `secretId`** (reversed vs `find`)
 
 API scopes (scoped to one resource):
 
-- `getAllApiScopes(apiId, page?, size?, filter?, sort?)` → `MonoCloudPageResponse<ApiScope[]>`
-- `createApiScope(apiId, req: CreateApiScopeRequest)` → `MonoCloudResponse<ApiScope>`
-- `findApiScopeById(scopeId, apiId)` → `MonoCloudResponse<ApiScope>`
-- `patchApiScope(scopeId, apiId, req: PatchApiScopeRequest)` → `MonoCloudResponse<ApiScope>` — **`name` is immutable**; it is no longer part of `PatchApiScopeRequest`.
-- `deleteApiScope(scopeId, apiId)` → `MonoCloudResponse<null>`
+- `getAllApiScopes(apiId: string, page?, size?, filter?, sort?)` → `MonoCloudPageResponse<ApiScope[]>`
+- `createApiScope(apiId: string, createApiScopeRequest: CreateApiScopeRequest)` → `MonoCloudResponse<ApiScope>`
+- `findApiScopeById(scopeId: string, apiId: string)` → `MonoCloudResponse<ApiScope>` — **param order: `scopeId` then `apiId`**
+- `patchApiScope(scopeId: string, apiId: string, patchApiScopeRequest: PatchApiScopeRequest)` → `MonoCloudResponse<ApiScope>` — **param order: `scopeId` then `apiId`**
+- `deleteApiScope(scopeId: string, apiId: string)` → `MonoCloudResponse<null>` — **param order: `scopeId` then `apiId`**
 
-API access policies (per resource — added in 0.2.7):
+API access policies (per resource). Basic policies use structured conditions; advanced policies use the policy-expression DSL. `convertApiAccessBasicToAdvancedPolicy` upgrades a basic policy to an advanced one (one-way):
 
-Basic policies use structured conditions; advanced policies use the policy expression DSL. `convertApiAccessBasicToAdvancedPolicy` turns a basic policy into an advanced one (one-way).
-
-- `getAllApiAccessPolicies(apiId, page?, size?, filter?, sort?)` → `MonoCloudPageResponse<ApiAccessPolicy[]>` — returns the union; discriminate by `type`.
-- `createApiAccessBasicPolicy(apiId, req: CreateApiAccessBasicPolicyRequest)` → `MonoCloudResponse<BasicApiAccessPolicy>`
-- `findApiAccessBasicPolicyById(apiId, policyId)` → `MonoCloudResponse<BasicApiAccessPolicy>`
-- `patchApiAccessBasicPolicy(apiId, policyId, req: PatchApiAccessBasicPolicyRequest)` → `MonoCloudResponse<BasicApiAccessPolicy>`
-- `deleteApiAccessBasicPolicy(apiId, policyId)` → `MonoCloudResponse<null>`
-- `convertApiAccessBasicToAdvancedPolicy(apiId, policyId)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
-- `createApiAccessAdvancedPolicy(apiId, req: CreateApiAccessAdvancedPolicyRequest)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
-- `findApiAccessAdvancedPolicyById(apiId, policyId)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
-- `patchApiAccessAdvancedPolicy(apiId, policyId, req: PatchApiAccessAdvancedPolicyRequest)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
-- `deleteApiAccessAdvancedPolicy(apiId, policyId)` → `MonoCloudResponse<null>`
+- `getAllApiAccessPolicies(apiId: string, page?, size?, sort?)` → `MonoCloudPageResponse<ApiAccessPolicy[]>` — returns the union; discriminate by `type`.
+- `createApiAccessBasicPolicy(apiId: string, createApiAccessBasicPolicyRequest: CreateApiAccessBasicPolicyRequest)` → `MonoCloudResponse<BasicApiAccessPolicy>`
+- `findApiAccessBasicPolicyById(apiId: string, policyId: string)` → `MonoCloudResponse<BasicApiAccessPolicy>`
+- `patchApiAccessBasicPolicy(apiId: string, policyId: string, patchApiAccessBasicPolicyRequest: PatchApiAccessBasicPolicyRequest)` → `MonoCloudResponse<BasicApiAccessPolicy>`
+- `deleteApiAccessBasicPolicy(apiId: string, policyId: string)` → `MonoCloudResponse<null>`
+- `convertApiAccessBasicToAdvancedPolicy(apiId: string, policyId: string)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
+- `createApiAccessAdvancedPolicy(apiId: string, createApiAccessAdvancedPolicyRequest: CreateApiAccessAdvancedPolicyRequest)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
+- `findApiAccessAdvancedPolicyById(apiId: string, policyId: string)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
+- `patchApiAccessAdvancedPolicy(apiId: string, policyId: string, patchApiAccessAdvancedPolicyRequest: PatchApiAccessAdvancedPolicyRequest)` → `MonoCloudResponse<AdvancedApiAccessPolicy>`
+- `deleteApiAccessAdvancedPolicy(apiId: string, policyId: string)` → `MonoCloudResponse<null>`
 
 Identity scopes (tenant-wide):
 
 - `getAllScopes(page?, size?, filter?, sort?)` → `MonoCloudPageResponse<Scope[]>`
-- `createScope(req: CreateScopeRequest)` → `MonoCloudResponse<Scope>`
-- `findScopeById(scopeId)` → `MonoCloudResponse<Scope>`
-- `patchScope(scopeId, req: PatchScopeRequest)` → `MonoCloudResponse<Scope>` — **`name` is immutable**; it is no longer part of `PatchScopeRequest`.
-- `deleteScope(scopeId)` → `MonoCloudResponse<null>`
+- `createScope(createScopeRequest: CreateScopeRequest)` → `MonoCloudResponse<Scope>`
+- `findScopeById(scopeId: string)` → `MonoCloudResponse<Scope>`
+- `patchScope(scopeId: string, patchScopeRequest: PatchScopeRequest)` → `MonoCloudResponse<Scope>`
+- `deleteScope(scopeId: string)` → `MonoCloudResponse<null>`
 
 Claim resources (custom claims):
 
 - `getAllClaimResources(page?, size?, filter?, sort?)` → `MonoCloudPageResponse<ClaimResource[]>`
-- `createClaimResource(req: CreateClaimResourceRequest)` → `MonoCloudResponse<ClaimResource>`
-- `findClaimResourceById(claimId)` → `MonoCloudResponse<ClaimResource>`
-- `patchClaimResource(claimId, req: PatchClaimResourceRequest)` → `MonoCloudResponse<ClaimResource>` — **`name` is immutable**; it is no longer part of `PatchClaimResourceRequest`.
-- `deleteClaimResource(claimId)` → `MonoCloudResponse<null>`
+- `createClaimResource(createClaimResourceRequest: CreateClaimResourceRequest)` → `MonoCloudResponse<ClaimResource>`
+- `findClaimResourceById(claimId: string)` → `MonoCloudResponse<ClaimResource>`
+- `patchClaimResource(claimId: string, patchClaimResourceRequest: PatchClaimResourceRequest)` → `MonoCloudResponse<ClaimResource>`
+- `deleteClaimResource(claimId: string)` → `MonoCloudResponse<null>`
 
-## `client.keys` — `KeysClient`
-
-Signing keys are managed by the platform — only enumeration, rotation, and revocation are exposed.
-
-- `getAllKeyMaterials(page?, size?)` → `MonoCloudPageResponse<KeyMaterial[]>`
-- `rotateKey(keyId)` → `MonoCloudResponse<null>`
-- `revokeKey(keyId)` → `MonoCloudResponse<null>`
-
-There is no `createKey`, `findKeyById`, or `getAllKeys` — those don't exist in the SDK.
-
-## `client.logs` — `LogsClient`
-
-- `getAllLogs(page?, size?, filter?, sort?)` → `MonoCloudPageResponse<Log[]>`
-- `findLogById(logId)` → `MonoCloudResponse<Log>`
-
-## `client.options` — `OptionsClient`
-
-Tenant-wide settings. The SDK exposes `Authentication`, `Communication`, sign-up-custom-fields, and (as of 0.2.9) external-authenticator options. Other option areas (recovery methods, identifier policies) are **not** currently surfaced as discrete methods on this client.
-
-- `findAuthenticationOptions()` → `MonoCloudResponse<AuthenticationOptions>`
-- `patchAuthenticationOptions(req: PatchAuthenticationOptionsRequest)` → `MonoCloudResponse<AuthenticationOptions>`
-- `findCommunicationOptions()` → `MonoCloudResponse<CommunicationOptions>`
-- `patchCommunicationOptions(req: PatchCommunicationOptionsRequest)` → `MonoCloudResponse<CommunicationOptions>`
-
-Sign-up custom fields:
-
-- `getAllSignUpCustomFields()` → `MonoCloudResponse<SignUpCustomField[]>`
-- `createSignUpCustomField(req: CreateSignUpCustomFieldRequest)` → `MonoCloudResponse<SignUpCustomField>`
-- `findSignUpCustomField(claimName)` → `MonoCloudResponse<SignUpCustomField>`
-- `patchSignUpCustomField(claimName, req: PatchSignUpCustomFieldRequest)` → `MonoCloudResponse<SignUpCustomField>`
-- `deleteSignUpCustomField(claimName)` → `MonoCloudResponse<null>`
-
-External authenticators (added in 0.2.9):
-
-- `getAllExternalAuthenticators()` → `MonoCloudResponse<ExternalAuthenticator[]>` (not paginated)
-- `createExternalAuthenticator(req: CreateExternalAuthenticatorRequest)` → `MonoCloudResponse<ExternalAuthenticator>`
-- `findExternalAuthenticator(name)` → `MonoCloudResponse<ExternalAuthenticator>`
-- `patchExternalAuthenticator(name, req: PatchExternalAuthenticatorRequest)` → `MonoCloudResponse<ExternalAuthenticator>`
-- `deleteExternalAuthenticator(name)` → `MonoCloudResponse<null>`
-
-## `client.branding` — `BrandingClient`
-
-Three distinct surfaces, each with `find* / patch*`:
-
-- `findPageBrandingOptions()` → `MonoCloudResponse<PageBrandingOptions>`
-- `patchPageBrandingOptions(req: PatchPageBrandingOptionsRequest)` → `MonoCloudResponse<PageBrandingOptions>`
-- `findEmailBrandingOptions()` → `MonoCloudResponse<EmailBrandingOptions>`
-- `patchEmailBrandingOptions(req: PatchEmailBrandingOptionsRequest)` → `MonoCloudResponse<EmailBrandingOptions>`
-- `findSmsBrandingOptions()` → `MonoCloudResponse<SmsBrandingOptions>`
-- `patchSmsBrandingOptions(req: PatchSmsBrandingOptionsRequest)` → `MonoCloudResponse<SmsBrandingOptions>`
-
-There is no `getBranding()` / `patchBranding()` umbrella method.
+> The `find`/`delete`/`patch` secret & scope methods interleave `apiId` and the child id differently — read the per-method notes above before passing arguments; transposing them is the easiest mistake to make here.
 
 ## `client.trustStores` — `TrustStoresClient`
 
-mTLS trust stores. As of 0.2.9 the client is split into two families — **PKI** trust stores (X.509 CA chains) and **SPIFFE** trust stores (federated SPIFFE trust domains) — each with its own ban list, plus offline certificate-revocation (CRL) management on the PKI side. All list methods are paginated (`page?, size?, sort?`); the ban-list getters are not.
+mTLS trust stores, split into two families — **PKI** (X.509 CA chains, with offline CRL revocation management) and **SPIFFE** (federated SPIFFE trust domains) — each with its own ban list. Accessor is camelCase `trustStores`. All list methods are paginated with `(page?, size?, sort?)`; the ban-list getters are not.
 
 PKI trust stores:
 
 - `getAllPkiTrustStores(page?, size?, sort?)` → `MonoCloudPageResponse<PkiTrustStoreSummary[]>`
-- `createPkiTrustStore(req: CreatePkiTrustStoreRequest)` → `MonoCloudResponse<PkiTrustStore>`
-- `findPkiTrustStoreById(trustStoreId)` → `MonoCloudResponse<PkiTrustStore>`
-- `patchPkiTrustStore(trustStoreId, req: PatchPkiTrustStoreRequest)` → `MonoCloudResponse<PkiTrustStore>`
-- `deletePkiTrustStore(trustStoreId)` → `MonoCloudResponse<null>`
-- `setPkiTrustStoreDefault(trustStoreId)` → `MonoCloudResponse<PkiTrustStore>`
+- `createPkiTrustStore(createPkiTrustStoreRequest: CreatePkiTrustStoreRequest)` → `MonoCloudResponse<PkiTrustStore>`
+- `findPkiTrustStoreById(trustStoreId: string)` → `MonoCloudResponse<PkiTrustStore>`
+- `patchPkiTrustStore(trustStoreId: string, patchPkiTrustStoreRequest: PatchPkiTrustStoreRequest)` → `MonoCloudResponse<PkiTrustStore>`
+- `deletePkiTrustStore(trustStoreId: string)` → `MonoCloudResponse<null>`
+- `setPkiTrustStoreDefault(trustStoreId: string)` → `MonoCloudResponse<PkiTrustStore>`
 
 Certificate revocations (offline CRLs — PKI only):
 
-- `getAllRevocations(trustStoreId, page?, size?, sort?)` → `MonoCloudPageResponse<RevocationGrouped[]>`
-- `addCertificateRevocation(trustStoreId, req: AddCertificateRevocationRequest)` → `MonoCloudResponse<ICertificateRevocation>`
-- `findCertificateRevocation(trustStoreId, revocationId)` → `MonoCloudResponse<ICertificateRevocation>`
-- `removeCertificateRevocation(trustStoreId, revocationId)` → `MonoCloudResponse<null>`
+- `getAllRevocations(trustStoreId: string, page?, size?, sort?)` → `MonoCloudPageResponse<RevocationGrouped[]>`
+- `addCertificateRevocation(trustStoreId: string, addCertificateRevocationRequest: AddCertificateRevocationRequest)` → `MonoCloudResponse<ICertificateRevocation>`
+- `findCertificateRevocation(trustStoreId: string, revocationId: string)` → `MonoCloudResponse<ICertificateRevocation>`
+- `removeCertificateRevocation(trustStoreId: string, revocationId: string)` → `MonoCloudResponse<null>`
 
 PKI banned certificates:
 
-- `getAllPkiBannedCertificates(trustStoreId)` → `MonoCloudResponse<BannedCertificate[]>` (not paginated)
-- `banPkiTrustStoreCertificate(trustStoreId, req: BanTrustStoreCertificateRequest)` → `MonoCloudResponse<BannedCertificate>`
-- `unbanPkiTrustStoreCertificate(trustStoreId, banId)` → `MonoCloudResponse<null>`
+- `getAllPkiBannedCertificates(trustStoreId: string)` → `MonoCloudResponse<BannedCertificate[]>` — **not paginated**
+- `banPkiTrustStoreCertificate(trustStoreId: string, banTrustStoreCertificateRequest: BanTrustStoreCertificateRequest)` → `MonoCloudResponse<BannedCertificate>`
+- `unbanPkiTrustStoreCertificate(trustStoreId: string, banId: string)` → `MonoCloudResponse<null>`
 
 SPIFFE trust stores:
 
 - `getAllSpiffeTrustStores(page?, size?, sort?)` → `MonoCloudPageResponse<SpiffeTrustStoreSummary[]>`
-- `createSpiffeTrustStore(req: CreateSpiffeTrustStoreRequest)` → `MonoCloudResponse<SpiffeTrustStore>`
-- `findSpiffeTrustStoreById(trustStoreId)` → `MonoCloudResponse<SpiffeTrustStore>`
-- `patchSpiffeTrustStore(trustStoreId, req: PatchSpiffeTrustStoreRequest)` → `MonoCloudResponse<SpiffeTrustStore>`
-- `deleteSpiffeTrustStore(trustStoreId)` → `MonoCloudResponse<null>`
-- `setSpiffeTrustStoreDefault(trustStoreId)` → `MonoCloudResponse<SpiffeTrustStore>`
+- `createSpiffeTrustStore(createSpiffeTrustStoreRequest: CreateSpiffeTrustStoreRequest)` → `MonoCloudResponse<SpiffeTrustStore>`
+- `findSpiffeTrustStoreById(trustStoreId: string)` → `MonoCloudResponse<SpiffeTrustStore>`
+- `patchSpiffeTrustStore(trustStoreId: string, patchSpiffeTrustStoreRequest: PatchSpiffeTrustStoreRequest)` → `MonoCloudResponse<SpiffeTrustStore>`
+- `deleteSpiffeTrustStore(trustStoreId: string)` → `MonoCloudResponse<null>`
+- `setSpiffeTrustStoreDefault(trustStoreId: string)` → `MonoCloudResponse<SpiffeTrustStore>`
 
 SPIFFE banned SVIDs:
 
-- `getAllSpiffeBannedSvids(trustStoreId)` → `MonoCloudResponse<BannedSvid[]>` (not paginated)
-- `banSpiffeTrustStoreSvid(trustStoreId, req: BanTrustStoreSvidRequest)` → `MonoCloudResponse<BannedSvid>`
-- `unbanSpiffeTrustStoreSvid(trustStoreId, banId)` → `MonoCloudResponse<null>`
+- `getAllSpiffeBannedSvids(trustStoreId: string)` → `MonoCloudResponse<BannedSvid[]>` — **not paginated**
+- `banSpiffeTrustStoreSvid(trustStoreId: string, banTrustStoreSvidRequest: BanTrustStoreSvidRequest)` → `MonoCloudResponse<BannedSvid>`
+- `unbanSpiffeTrustStoreSvid(trustStoreId: string, banId: string)` → `MonoCloudResponse<null>`
 
-Related models: `PkiTrustStore`, `PkiTrustStoreSummary`, `PkiTrustStoreOptions`, `SpiffeTrustStore`, `SpiffeTrustStoreSummary`, `SpiffeTrustStoreOptions`, `BannedCertificate`, `BannedSvid`, `RevocationGrouped`, and `ICertificateRevocation` — a discriminated union (`{ type: 'base' } & BaseCertificateRevocation` | `{ type: 'delta' } & DeltaCertificateRevocation`). Request types: `CreatePkiTrustStoreRequest` / `PatchPkiTrustStoreRequest` / `CreateSpiffeTrustStoreRequest` / `PatchSpiffeTrustStoreRequest` (each paired with a `*OptionsRequest`), `AddCertificateRevocationRequest`, `BanTrustStoreCertificateRequest`, `BanTrustStoreSvidRequest`.
-
-> **Removed in 0.2.9:** the unified `getAllTrustStores` / `createTrustStore` / `findTrustStoreById` / `patchTrustStore` / `deleteTrustStore` / `setTrustStoreDefault` methods, the `TrustStore` / `TrustStoreSummary` models, and the `TrustStoreSource` enum (`'database'` | `'s3'`). Use the PKI/SPIFFE-specific methods above. Revocation calls now return `ICertificateRevocation` (was `CertificateRevocation`).
+`ICertificateRevocation` is a discriminated union — narrow on `type`: `({ type: 'base' } & BaseCertificateRevocation) | ({ type: 'delta' } & DeltaCertificateRevocation)`.
 
 ## `client.networkZones` — `NetworkZonesClient`
 
-Added in 0.2.7. Network zones group IP ranges or geographic regions and can be referenced by API access policies. Each zone is one of two types, discriminated by the `type` field on `INetworkZone`:
+IP and Regional network zones (allow/deny access rules), referenced by API access policies. Accessor is camelCase `networkZones`. Each zone is one of two types, discriminated by the `type` field on `INetworkZone`.
 
-- **IP network zones** — explicit CIDR ranges.
-- **Regional network zones** — country/region codes.
-
-> Access to most network-zone endpoints requires an active **ScaleX subscription**. Calls fail with a typed exception when the tenant does not have it.
+> The whole resource is **ScaleX**-gated: the create/patch methods below are annotated as requiring an active ScaleX subscription, and gated calls fail with HTTP 402 → `MonoCloudPaymentRequiredException`.
 
 Listing:
 
@@ -480,36 +484,53 @@ Listing:
 
 IP zones:
 
-- `createIpNetworkZone(req: CreateIpNetworkZoneRequest)` → `MonoCloudResponse<IpNetworkZone>`
-- `findIpNetworkZoneById(zoneId)` → `MonoCloudResponse<IpNetworkZone>`
-- `patchIpNetworkZone(zoneId, req: PatchIpNetworkZoneRequest)` → `MonoCloudResponse<IpNetworkZone>`
-- `deleteIpNetworkZone(zoneId)` → `MonoCloudResponse<null>`
+- `createIpNetworkZone(createIpNetworkZoneRequest: CreateIpNetworkZoneRequest)` → `MonoCloudResponse<IpNetworkZone>` — **ScaleX**
+- `findIpNetworkZoneById(zoneId: string)` → `MonoCloudResponse<IpNetworkZone>`
+- `patchIpNetworkZone(zoneId: string, patchIpNetworkZoneRequest: PatchIpNetworkZoneRequest)` → `MonoCloudResponse<IpNetworkZone>` — **ScaleX**
+- `deleteIpNetworkZone(zoneId: string)` → `MonoCloudResponse<null>`
 
 Regional zones:
 
-- `createRegionalNetworkZone(req: CreateRegionalNetworkZoneRequest)` → `MonoCloudResponse<RegionalNetworkZone>`
-- `findRegionalNetworkZoneById(zoneId)` → `MonoCloudResponse<RegionalNetworkZone>`
-- `patchRegionalNetworkZone(zoneId, req: PatchRegionalNetworkZoneRequest)` → `MonoCloudResponse<RegionalNetworkZone>`
-- `deleteRegionalNetworkZone(zoneId)` → `MonoCloudResponse<null>`
+- `createRegionalNetworkZone(createRegionalNetworkZoneRequest: CreateRegionalNetworkZoneRequest)` → `MonoCloudResponse<RegionalNetworkZone>` — **ScaleX**
+- `findRegionalNetworkZoneById(zoneId: string)` → `MonoCloudResponse<RegionalNetworkZone>`
+- `patchRegionalNetworkZone(zoneId: string, patchRegionalNetworkZoneRequest: PatchRegionalNetworkZoneRequest)` → `MonoCloudResponse<RegionalNetworkZone>` — **ScaleX**
+- `deleteRegionalNetworkZone(zoneId: string)` → `MonoCloudResponse<null>`
 
-`NetworkZoneCategory` and `NetworkZoneOperator` are exported enums used by the request/response models — refer to TypeScript intellisense for valid values.
+`INetworkZone = ({ type: 'ip' } & IpNetworkZone) | ({ type: 'regional' } & RegionalNetworkZone)`. `NetworkZoneCategory` and `NetworkZoneOperator` are exported enums used by the request/response models.
+
+## Subscription tiers
+
+Subscription gating is documented in-source via `@note` JSDoc tags and enforced at runtime by the server returning HTTP **402** → `MonoCloudPaymentRequiredException`. There is no client-side hard-coded enforcement — the SDK just surfaces the 402. Three named tiers appear.
+
+| Tier | Method-level gates |
+|---|---|
+| **Pro plan** | `groups.createGroup` (only when creating more than two groups); `users.getAllUserSessions` / `findUserSession` / `revokeUserSession`; `users.getAllUserClientGrants` |
+| **Secure+** | `users.getAllUserConsents`, `getAllReferenceTokens`, `getAllRefreshTokens`, `getAllAuthorizationCodes`, `revokeUserClientGrants`, `revokeUserConsent`, `revokeReferenceToken`, `revokeRefreshToken`, `revokeAuthorizationCode` |
+| **ScaleX** | `clients.assignGroupToApplication` / `removeGroupFromApplication`; `networkZones.createIpNetworkZone` / `patchIpNetworkZone` / `createRegionalNetworkZone` / `patchRegionalNetworkZone`; `resources.createApiResourceSecret` |
+
+Some create/patch **request fields** are also tier-gated (setting them on a lower tier triggers a 402): consents / JWT request objects (JAR) / Pushed Authorization Requests / back-channel logout are **Secure+**; authenticator restrictions / front-channel logout / sign-up restrictions are **Pro plan**; UserInfo access / multi-audience tokens / long refresh-token lifetimes / API secrets / reference tokens / session binding are **ScaleX**. Consult the specific model's `@note` tags in intellisense.
+
+## PATCH semantics
+
+Every update method is a `patch*` — a partial merge, not a full replace. There are no PUT-style methods on the public surface. Per-field immutability (which properties a given `Patch*Request` accepts) is defined inside each request model; there are no repo-wide `immutable`/`readonly` markers, so treat the [Management API docs](https://www.monocloud.com/docs/apis/management) and TypeScript intellisense on the specific `Patch*Request` type as authoritative for what you may send.
 
 ## Defaults
 
-- HTTP timeout when neither `config.timeout` nor `MONOCLOUD_MANAGEMENT_TIMEOUT` is set: **10000 ms** (10s), via `AbortSignal.timeout(...)`.
-- Pagination `page` parameter is **1-indexed**. The server defines its own default `size` per endpoint (typically 10).
+- HTTP timeout when neither `config.timeout` nor `MONOCLOUD_MANAGEMENT_TIMEOUT` is set: **10000 ms** (10 s), applied by the built-in fetcher via `AbortSignal.timeout(...)`. A timeout throws a plain `MonoCloudException` (original `error.name === 'TimeoutError'`).
+- Default headers set by the built-in fetcher: `X-API-KEY: <apiKey>` and `Content-Type: application/json`.
+- Pagination `page?`/`size?`/`filter?`/`sort?` (and `clientId?`/`sessionId?` on the user token lists) have **no client-side defaults** — when `undefined` they are simply omitted from the query string and the server applies its own defaults. Query field names sent: `page`, `size`, `filter`, `sort`, `client_id`, `session_id`.
 
 ## Filter and sort expressions
 
-- `filter` accepts Lucene-style expressions (varies per endpoint; see the [Management API docs](https://www.monocloud.com/docs/apis/management)).
-- `sort` is `"<field>:1"` (ascending) or `"<field>:-1"` (descending). Sortable fields are documented per method.
+- `filter` accepts Lucene-style expressions (the searchable fields vary per endpoint; see the [Management API docs](https://www.monocloud.com/docs/apis/management)).
+- `sort` is `"<field>:1"` (ascending) or `"<field>:-1"` (descending). Sortable fields are documented per endpoint.
 
 ## Environment variables
 
 | Env var | Option | Required? | Purpose |
 |---|---|---|---|
-| `MONOCLOUD_MANAGEMENT_DOMAIN` | `domain` | yes | Tenant URL (no `/api`, no trailing slash) |
-| `MONOCLOUD_MANAGEMENT_API_KEY` | `apiKey` | yes | Management API key (sent as `X-API-KEY`) |
-| `MONOCLOUD_MANAGEMENT_TIMEOUT` | `config.timeout` | no | Request timeout in milliseconds |
+| `MONOCLOUD_MANAGEMENT_DOMAIN` | `domain` | yes | Tenant URL, e.g. `example.us.monocloud.com` (no `/api`, no trailing slash). Empty → throws `Tenant Domain is required`. |
+| `MONOCLOUD_MANAGEMENT_API_KEY` | `apiKey` | yes | Management API key, sent as `X-API-KEY`. Empty → throws `Api Key is required`. |
+| `MONOCLOUD_MANAGEMENT_TIMEOUT` | `config.timeout` | no | Request timeout in **milliseconds** (parsed via `parseInt(…, 10)`; applied only if a positive integer). |
 
-Options passed to `init()` always win over environment variables. There is no env var for a custom `fetcher`.
+Options passed to `init()` win over environment variables. There is no env var for a custom `fetcher`.

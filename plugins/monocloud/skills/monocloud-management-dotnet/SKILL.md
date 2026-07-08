@@ -1,65 +1,64 @@
 ---
 name: monocloud-management-dotnet
-description: Use when calling the MonoCloud Management API from .NET — installing or configuring the `MonoCloud.Management` NuGet package, constructing `MonoCloudManagementClient` (direct or via DI with `AddMonoCloudManagementClient`), calling resource clients (`Users`, `Clients`, `Groups`, `Resources`, `Keys`, `Logs`, `Options`, `Branding`, `TrustStores`, `NetworkZones`) — including PKI/SPIFFE (mTLS) trust stores, external authenticators, and API access policies — reading `MonoCloudResponse<T>.Data` (and `PageData` for paginated lists), handling `MonoCloudException` subclasses, or troubleshooting `MonoCloud:Management:Domain` / `MonoCloud:Management:ApiKey` / 401 / 403 / validation errors.
+description: Use when calling the MonoCloud Management API from .NET — installing or configuring the `MonoCloud.Management` NuGet package, constructing `MonoCloudManagementClient` (direct or via DI with `AddMonoCloudManagementClient`), calling resource clients (`Users`, `Clients`, `Groups`, `Resources`, `Keys`, `Logs`, `NetworkZones`, `Options`, `Branding`, `TrustStores`) — including PKI/SPIFFE (mTLS) trust stores, external authenticators, network zones, and API access policies — reading `MonoCloudResponse<T>.Data` (and `PageData`/`PageModel` for paginated lists), catching `MonoCloudException` subclasses (`MonoCloudUnauthorizedException`, `MonoCloudForbiddenException`, `MonoCloudNotFoundException`, `MonoCloudIdentityValidationException`), or troubleshooting `MonoCloud:Management:Domain` / `MonoCloud:Management:ApiKey` / `Timeout` / 401 / 403 / 422 validation errors.
 license: MIT
 ---
 
 # MonoCloud Management .NET SDK (`MonoCloud.Management`)
 
-Typed .NET SDK for the MonoCloud Management API. Use it to programmatically manage users, applications, groups, API resources, sign-in options, branding, logs, keys, and trust stores from .NET (Framework 4.6.2+, .NET Standard 2.0, or modern .NET).
+Typed .NET SDK for the MonoCloud Management API. Use it to programmatically manage users, applications, groups, API resources, sign-in options, branding, logs, signing keys, network zones, and PKI/SPIFFE trust stores from .NET (Framework 4.6.2+, .NET Standard 2.0, or modern .NET).
 
 ## Package identity — read this first
 
-**Use:** `MonoCloud.Management` NuGet package.
+**Use:** the `MonoCloud.Management` NuGet package. Check `*.csproj` / `packages.config` before writing code — confirm the `<PackageReference Include="MonoCloud.Management" ... />` is present and note its version.
 
 This is **not** the same as:
 
-- `MonoCloud.AspNetCore.Authentication` family (user-facing OIDC auth — outside this skill).
-- `MonoCloud.Cedar` (policy / authorization engine — outside this skill).
+- `MonoCloud.AspNetCore.Authentication` / any auth middleware (user-facing OIDC sign-in — outside this skill).
+- `MonoCloud.Management.Core` — the internal core package that `MonoCloud.Management` depends on. Do **not** add a project/package reference to it directly; app code depends only on `MonoCloud.Management`.
 
-If code references `MonoCloud.Management.Core` directly, that's the internal core package. App code should depend only on `MonoCloud.Management` — the core types (`MonoCloudConfig`, `MonoCloudResponse<T>`, `MonoCloudException`, etc.) are accessible via `using MonoCloud.Management;`.
+Stale-training-data guards — none of these exist in this SDK; do not emit them:
+
+- There is **no** `MonoCloudManagementApi`, `ManagementApiClient`, or `ApiClient` entry type. The entry type is `MonoCloudManagementClient`.
+- Response bodies are read from `.Data`, **not** `.Result`, `.Body`, or `.Value`. Status is `.Status`, **not** `.StatusCode`.
+- The SDK reads **no** environment variables of its own (no `MONOCLOUD_MANAGEMENT_*` fallback). Config flows through `IConfiguration` / options only.
 
 ## Installation
-
-```powershell
-Install-Package MonoCloud.Management
-```
 
 ```bash
 dotnet add package MonoCloud.Management
 ```
 
-Supported targets: **`.NET Framework 4.6.2+`**, **`.NET Standard 2.0`**, **`.NET 6.0+`** (anything that consumes netstandard2.0).
+```powershell
+Install-Package MonoCloud.Management
+```
+
+Supported targets: **`.NET Framework 4.6.2+`**, **`.NET Standard 2.0`**, and any modern **`.NET 6.0+`** that consumes netstandard2.0.
 
 ## Authentication — Management API key
 
-A **Management API key** (generated in the MonoCloud dashboard → Settings → API Keys) is required. Treat it like a root credential:
+A **Management API key** (generated in the MonoCloud dashboard → Settings → API Keys) is required. It is tenant-scoped with full admin permissions — treat it like a root credential:
 
 - Never check it into source control.
 - Read it from `IConfiguration` (`appsettings.json` + environment variables / User Secrets / Key Vault / etc.).
-- A Management API key is tenant-scoped with full admin permissions.
 
-## Configuration keys
+The SDK authenticates by sending the key in the `X-API-KEY` request header. It sets `BaseAddress` to `{Domain}/api/` under the hood.
 
-The recommended path is `IConfiguration` + the DI extension. Configuration is read from the section **`MonoCloud:Management`**.
+## Environment variables and configuration keys
 
-| Key                            | Required? | Purpose                                          |
-| ------------------------------ | --------- | ------------------------------------------------ |
-| `MonoCloud:Management:Domain`  | yes       | Tenant URL, e.g. `https://acme.us.monocloud.com` |
-| `MonoCloud:Management:ApiKey`  | yes       | Management API key                               |
-| `MonoCloud:Management:Timeout` | no        | Request timeout in **seconds**                   |
+The .NET SDK (v0.2.10) reads configuration from the **`MonoCloud:Management`** section of `IConfiguration` — it does **not** read process environment variables on its own. You can still surface env vars through the standard ASP.NET Core configuration mapping (double-underscore).
 
-In Linux/CI environments, set these via env vars using the standard ASP.NET Core mapping:
+| Config key                     | Env-var form (ASP.NET Core)      | Required | Purpose                                             |
+| ------------------------------ | -------------------------------- | -------- | --------------------------------------------------- |
+| `MonoCloud:Management:Domain`  | `MonoCloud__Management__Domain`  | yes      | Tenant URL, e.g. `https://acme.us.monocloud.com`    |
+| `MonoCloud:Management:ApiKey`  | `MonoCloud__Management__ApiKey`  | yes      | Management API key                                  |
+| `MonoCloud:Management:Timeout` | `MonoCloud__Management__Timeout` | no       | Request timeout in **seconds** (default `10`)       |
 
-- `MonoCloud__Management__Domain`
-- `MonoCloud__Management__ApiKey`
-- `MonoCloud__Management__Timeout`
-
-Never hardcode the API key in `appsettings.json` that ships with the app. Use User Secrets locally and a secret manager in production.
+`Domain` is sanitized on construction: a missing `https://` prefix is added and a trailing `/` is stripped. Store the API key in User Secrets locally (`dotnet user-secrets set "MonoCloud:Management:ApiKey" "..."`) and a secret manager in production — never in a shipped `appsettings.json`.
 
 ## Quick start — DI (recommended)
 
-`appsettings.Development.json` (local dev only; use User Secrets for the API key):
+`appsettings.Development.json` (API key comes from User Secrets, not this file):
 
 ```json
 {
@@ -87,13 +86,27 @@ var app = builder.Build();
 app.MapGet("/users", async (MonoCloudManagementClient management) =>
 {
     var response = await management.Users.GetAllUsersAsync(page: 1, size: 25);
-    return Results.Ok(response.Data);
+    return Results.Ok(response.Data);   // response.Data is List<UserSummary>
 });
 
 app.Run();
 ```
 
-Inject `MonoCloudManagementClient` anywhere it's needed. The DI extension registers it as **transient**, backed by `IHttpClientFactory` (so connection pooling, retries, etc. layer cleanly on top).
+Inject `MonoCloudManagementClient` wherever you need it. `AddMonoCloudManagementClient` registers it as **transient**, backed by a named `IHttpClientFactory` client (`"MonoCloudManagementClient"`), so pooling/retries/policies layer cleanly on top.
+
+### Mixing DI options with code
+
+`AddMonoCloudManagementClient` also accepts an `Action<MonoCloudManagementOptions>` — alone, or alongside `IConfiguration`. When both are supplied, **the options action wins** for any value it sets. Registration throws `ArgumentNullException` if `Domain` or `ApiKey` is empty after merging.
+
+```csharp
+builder.Services.AddMonoCloudManagementClient(builder.Configuration, options =>
+{
+    options.ApiKey = builder.Configuration["Secrets:MonoCloudApiKey"];
+    options.Timeout = TimeSpan.FromSeconds(60);
+});
+```
+
+`MonoCloudManagementOptions` is `{ string? Domain; string? ApiKey; TimeSpan? Timeout; }`.
 
 ## Quick start — direct construction
 
@@ -104,18 +117,18 @@ using MonoCloud.Management;
 using MonoCloud.Management.Core.Base;   // MonoCloudConfig
 
 var config = new MonoCloudConfig(
-    domain: "https://your-tenant.us.monocloud.com",   // or read from your own settings
+    domain: "https://your-tenant.us.monocloud.com",
     apiKey: "your-management-api-key",
-    timeout: TimeSpan.FromSeconds(30)                 // optional; defaults to 10s
+    timeout: TimeSpan.FromSeconds(30)   // optional; defaults to 10s
 );
 
 var management = new MonoCloudManagementClient(config);
 var response = await management.Users.GetAllUsersAsync(1, 25);
 ```
 
-The .NET SDK does **not** read environment variables on its own — that's the DI extension's job (via `IConfiguration`). For direct construction, source the values however you normally configure secrets in your app: `IConfiguration`, user-secrets, a key vault, `Environment.GetEnvironmentVariable("MonoCloud__Management__Domain")` if you want to reuse the DI convention, etc.
+`MonoCloudConfig` just carries `Domain`, `ApiKey`, and `Timeout` — it does **not** validate on its own. The non-empty `Domain`/`ApiKey` check runs when the **client** is built (in `MonoCloudClientBase`), so a bad config throws `MonoCloudException` (`Tenant Domain is required` / `API Key is required`) at `new MonoCloudManagementClient(config)`, not at `new MonoCloudConfig(...)`.
 
-`MonoCloudManagementClient` also accepts an `HttpClient` directly — useful for integration tests with a test server:
+`MonoCloudManagementClient` also accepts a pre-built `HttpClient` — useful for integration tests and custom HTTP pipelines (see [DI registration and HTTP-layer replacement](#di-registration-and-http-layer-replacement)):
 
 ```csharp
 var http = new HttpClient { BaseAddress = new Uri("https://example.com/api/") };
@@ -123,60 +136,50 @@ http.DefaultRequestHeaders.Add("X-API-KEY", "test-key");
 var management = new MonoCloudManagementClient(http);
 ```
 
-Authentication happens via the `X-API-KEY` header — the SDK adds it automatically when you use `MonoCloudConfig`.
-
-## Mixing DI options with code
-
-`AddMonoCloudManagementClient` also takes an `Action<MonoCloudManagementOptions>` (alone, or alongside `IConfiguration`). The action's values override the configuration.
-
-```csharp
-builder.Services.AddMonoCloudManagementClient(builder.Configuration, options =>
-{
-    options.ApiKey = builder.Configuration["Secrets:MonoCloudApiKey"];
-    options.Timeout = TimeSpan.FromSeconds(60);
-});
-```
-
 ## Client surface
 
-`MonoCloudManagementClient` exposes one property per Management API resource area:
+`MonoCloudManagementClient` exposes 10 resource-client properties:
 
-| Property        | Resource                                                            | Backing type         |
-| --------------- | ------------------------------------------------------------------- | -------------------- |
-| `.Branding`     | Branding                                                            | `BrandingClient`     |
-| `.Clients`      | OAuth applications                                                  | `ClientsClient`      |
-| `.Groups`       | Groups                                                              | `GroupsClient`       |
-| `.Keys`         | Signing keys                                                        | `KeysClient`         |
-| `.Logs`         | Audit logs                                                          | `LogsClient`         |
-| `.NetworkZones` | IP + regional network zones (added in 0.2.8 — **ScaleX** required)  | `NetworkZonesClient` |
-| `.Options`      | Tenant options                                                      | `OptionsClient`      |
-| `.Resources`    | API resources, scopes, claim resources, **API access policies**     | `ResourcesClient`    |
-| `.TrustStores`  | PKI (mTLS) + SPIFFE trust stores                                    | `TrustStoresClient`  |
-| `.Users`        | Users                                                               | `UsersClient`        |
+| Property        | Resource area                                                              | Backing type         |
+| --------------- | -------------------------------------------------------------------------- | -------------------- |
+| `.Users`        | Users: CRUD, identifiers, passwords, passkeys, claims, sessions, grants    | `UsersClient`        |
+| `.Clients`      | OAuth/OIDC **applications** (operates on the `Application` model)           | `ClientsClient`      |
+| `.Groups`       | Groups: CRUD                                                               | `GroupsClient`       |
+| `.Resources`    | API resources, API scopes, **API access policies**, scopes, claim resources | `ResourcesClient`    |
+| `.Keys`         | Signing key material: list, rotate, revoke                                 | `KeysClient`         |
+| `.Logs`         | Audit / event logs: list, find                                             | `LogsClient`         |
+| `.NetworkZones` | IP + regional network zones (**ScaleX** for create/patch)                  | `NetworkZonesClient` |
+| `.Options`      | Tenant options: authentication, communication, sign-up custom fields        | `OptionsClient`      |
+| `.Branding`     | Branding options for pages, emails, SMS                                    | `BrandingClient`     |
+| `.TrustStores`  | PKI (mTLS) + SPIFFE trust stores, revocations, bans                        | `TrustStoresClient`  |
 
-Each method on a resource client returns `Task<MonoCloudResponse<T>>` or `Task<MonoCloudResponse<T, PageModel>>` for paginated lists, plus a `CancellationToken` parameter. See [`references/api-surface.md`](references/api-surface.md) for the full method index.
+All resource-client classes live in `namespace MonoCloud.Management.Clients` and derive from `MonoCloudClientBase`. Every method is PascalCase, ends in `Async`, and takes a trailing `CancellationToken cancellationToken = default`. See [`references/api-surface.md`](references/api-surface.md) for the full, per-method index (signatures verbatim, including subscription-tier notes).
+
+> **Naming quirk — `Clients` operates on `Application`.** The `.Clients` accessor / `ClientsClient` manages the **`Application`** resource: `GetAllApplicationsAsync`, `CreateApplicationAsync`, `PatchApplicationRequest`, etc. Path params are named `clientId` (a `string`), but there is no `Client` model — do not expect one.
 
 ## Response shape
+
+Every method returns one of three envelopes from `namespace MonoCloud.Management.Core.Base`:
 
 ```csharp
 public class MonoCloudResponse
 {
-    public int Status { get; }
-    public IDictionary<string, IEnumerable<string>> Headers { get; }
+    public int Status { get; }                                           // HTTP status
+    public IDictionary<string, IEnumerable<string>> Headers { get; }     // multi-valued
 }
 
 public class MonoCloudResponse<T> : MonoCloudResponse
 {
-    public T Data { get; }
+    public T Data { get; }                                               // deserialized body
 }
 
-// Paginated variant adds .PageData
+// Paginated list variant adds .PageData
 public class MonoCloudResponse<T, TPage> : MonoCloudResponse<T> where TPage : PageModel
 {
-    public TPage PageData { get; }   // always present (zero-valued PageModel if the server omits the header)
+    public TPage PageData { get; }   // TPage is always PageModel; zero-valued if the server omits x-pagination
 }
 
-public class PageModel
+public class PageModel   // namespace MonoCloud.Management.Core.Helpers
 {
     public int PageSize { get; set; }
     public int CurrentPage { get; set; }
@@ -186,9 +189,13 @@ public class PageModel
 }
 ```
 
-> The body property is **`Data`** (not `Result`), the status property is **`Status`** (not `StatusCode`), and `Headers` is `IDictionary<string, IEnumerable<string>>` (multi-valued, not a flat string map).
+- The body property is **`Data`** (not `Result`); the status property is **`Status`** (not `StatusCode`).
+- **Void-return operations** (Delete / Remove / Revoke / Rotate / ban-removal / `AssignGroupToApplicationAsync`) return the bare `MonoCloudResponse` — there is no `.Data`; read `.Status` / `.Headers`.
+- A few list endpoints return `MonoCloudResponse<List<T>>` (no `PageData`): `GetAllApplicationSecretsAsync`, `GetAllApiResourceSecretsAsync`, `GetAllSignUpCustomFieldsAsync`, `GetAllPkiBannedCertificatesAsync`, `GetAllSpiffeBannedSvidsAsync`. Most other list endpoints are paginated (`MonoCloudResponse<List<T>, PageModel>`).
 
 ## Pagination
+
+Pagination metadata arrives in the `x-pagination` response header and lands in `.PageData`. Idiomatic drain loop:
 
 ```csharp
 async IAsyncEnumerable<UserSummary> EachUserAsync(
@@ -206,13 +213,12 @@ async IAsyncEnumerable<UserSummary> EachUserAsync(
 }
 ```
 
-List methods share the `(page, size, filter, sort, cancellationToken)` shape:
+Paginated list methods share the `(int? page = 1, int? size = 10, string? filter = default, string? sort = default, CancellationToken)` shape:
 
 - `page` — 1-indexed (defaults to 1).
 - `size` — items per page (defaults to 10).
-- `filter` — Lucene-style expression (per-endpoint; see API docs).
+- `filter` — Lucene-style expression (per-endpoint; see the API docs).
 - `sort` — `"<field>:<1|-1>"` (1 ascending, -1 descending).
-- `cancellationToken` — optional.
 
 ## Common operations
 
@@ -225,27 +231,16 @@ var created = await management.Users.CreateUserAsync(new CreateUserRequest
     EmailVerified = true,
     Name = "Alice Example",
 });
-var userId = created.Data.UserId; // identifier field is UserId, not Id
+var userId = created.Data.UserId;   // the identifier field is UserId (string), not Id
 ```
 
-### Patch metadata (merge semantics)
-
-```csharp
-await management.Users.PatchPrivateDataAsync(userId, new UpdatePrivateDataRequest
-{
-    PrivateData = new Dictionary<string, object?> { ["onboarded"] = true, ["plan"] = "pro" }
-});
-```
-
-Patch is field-level merge: omitted properties are left alone; properties set to `null` are removed.
-
-### Lookup with not-found handling
+### Look up a user, handling not-found
 
 ```csharp
 try
 {
-    var response = await management.Users.FindUserByIdAsync(id);
-    return response.Data;
+    var response = await management.Users.FindUserByIdAsync(userId);
+    return response.Data;   // User
 }
 catch (MonoCloudNotFoundException)
 {
@@ -253,41 +248,61 @@ catch (MonoCloudNotFoundException)
 }
 ```
 
+### Patch claims / metadata (partial update)
+
+```csharp
+await management.Users.PatchPrivateDataAsync(userId, new UpdatePrivateDataRequest
+{
+    PrivateData = new Dictionary<string, object> { ["onboarded"] = true, ["plan"] = "pro" }
+});
+```
+
+`Patch*Request` bodies use `Optional<T>` per property — only fields you explicitly assign are serialized, so PATCH is a true partial update. Resource identifiers are path-only and never appear in the patch body (they cannot be changed).
+
 ### Disable a user
 
 ```csharp
-await management.Users.DisableUserAsync(id, new DisableUserRequest { /* options */ });
+await management.Users.DisableUserAsync(userId, new DisableUserRequest { RevokeSessions = true });
 ```
 
 ### List applications
 
 ```csharp
-// The property is .Clients, but the methods talk about Application*.
+// The accessor is .Clients, but the methods and models talk about Application*.
 var apps = await management.Clients.GetAllApplicationsAsync(page: 1, size: 50);
-foreach (var app in apps.Data) { /* ... */ }
+foreach (var app in apps.Data) { /* app is Application */ }
+```
+
+### Read audit logs
+
+```csharp
+var logs = await management.Logs.GetAllLogsAsync(page: 1, size: 20, sort: "created:-1");
+foreach (var log in logs.Data) { /* log is Log */ }
+
+var one = await management.Logs.FindLogByIdAsync(logId);   // logId is a Guid
 ```
 
 ## Errors
 
-Every non-2xx response throws a typed exception that derives from `MonoCloudException`:
+Every non-2xx response throws a typed exception. All derive from `MonoCloudException` (`namespace MonoCloud.Management.Core.Exception`); HTTP-status exceptions derive from `MonoCloudRequestException`, which exposes `ProblemDetails? Response`.
 
-| Class                                  | Thrown for                                                                       |
-| -------------------------------------- | -------------------------------------------------------------------------------- |
-| `MonoCloudBadRequestException`         | 400                                                                              |
-| `MonoCloudUnauthorizedException`       | 401                                                                              |
-| `MonoCloudPaymentRequiredException`    | 402                                                                              |
-| `MonoCloudForbiddenException`          | 403                                                                              |
-| `MonoCloudNotFoundException`           | 404                                                                              |
-| `MonoCloudConflictException`           | 409                                                                              |
-| `MonoCloudIdentityValidationException` | 422 (identity validation) — `.Errors` is `IEnumerable<IdentityError>`            |
-| `MonoCloudKeyValidationException`      | 422 (key/value validation) — `.Errors` is `IDictionary<string, string[]>`        |
-| `MonoCloudModelStateException`         | 422 (other)                                                                      |
-| `MonoCloudResourceExhaustedException`  | 429                                                                              |
-| `MonoCloudServerException`             | 5xx                                                                              |
-| `MonoCloudRequestException`            | base for all of the above — exposes `.Response` (`ProblemDetails?`)              |
-| `MonoCloudException`                   | base (`Exception`) — also thrown for non-HTTP failures (deserialization, etc.)   |
+| Class                                  | Thrown for                                                                        |
+| -------------------------------------- | --------------------------------------------------------------------------------- |
+| `MonoCloudBadRequestException`         | 400                                                                               |
+| `MonoCloudUnauthorizedException`       | 401 — bad/missing `X-API-KEY`                                                      |
+| `MonoCloudPaymentRequiredException`    | 402 — subscription/billing required                                               |
+| `MonoCloudForbiddenException`          | 403 — feature not on the current plan / insufficient tier                         |
+| `MonoCloudNotFoundException`           | 404                                                                               |
+| `MonoCloudConflictException`           | 409                                                                               |
+| `MonoCloudIdentityValidationException` | 422 (identity validation) — `.Errors` is `IEnumerable<IdentityError>`             |
+| `MonoCloudKeyValidationException`      | 422 (field validation) — `.Errors` is `IDictionary<string, string[]>`            |
+| `MonoCloudModelStateException`         | 422 (fallback / non-problem+json body)                                            |
+| `MonoCloudResourceExhaustedException`  | 429 — rate limited                                                                |
+| `MonoCloudServerException`             | 5xx                                                                               |
+| `MonoCloudRequestException`            | base for all HTTP-status exceptions — exposes `.Response` (`ProblemDetails?`)     |
+| `MonoCloudException`                   | base (`Exception`) — also thrown for config/transport/deserialization failures    |
 
-`MonoCloudException` does not have a `StatusCode` property. Branch on the subclass with `catch (MonoCloudNotFoundException)`, or read `(ex as MonoCloudRequestException)?.Response?.Status` for the underlying problem-details status.
+`MonoCloudException` has **no** `StatusCode` property. Branch on the subclass, or read `(ex as MonoCloudRequestException)?.Response?.Status` for the problem-details status.
 
 ```csharp
 try
@@ -300,7 +315,7 @@ catch (MonoCloudConflictException)
 }
 catch (MonoCloudIdentityValidationException ex)
 {
-    return Results.UnprocessableEntity(ex.Errors);
+    return Results.UnprocessableEntity(ex.Errors);   // IEnumerable<IdentityError>
 }
 catch (MonoCloudRequestException ex)
 {
@@ -310,31 +325,56 @@ catch (MonoCloudRequestException ex)
 }
 ```
 
+## Subscription tiers
+
+Some endpoints require a paid tier; the server returns 403 (`MonoCloudForbiddenException`) or 402 (`MonoCloudPaymentRequiredException`) when the tier is insufficient.
+
+| Tier    | Gated operations                                                                                                                                          |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pro     | `Groups.CreateGroupAsync` beyond two groups; `Users` session methods (`GetAllUserSessionsAsync`, `FindUserSessionAsync`, `RevokeUserSessionAsync`); `Users.GetAllUserClientGrantsAsync` |
+| Secure+ | `Users` consent/token reads (`GetAllUserConsentsAsync`, `GetAllReferenceTokensAsync`, `GetAllRefreshTokensAsync`, `GetAllAuthorizationCodesAsync`) and the matching `Revoke*` methods; the `EnableConsent` field on `Application` requests |
+| ScaleX  | `NetworkZones` create/patch (`CreateIpNetworkZoneAsync`, `PatchIpNetworkZoneAsync`, `CreateRegionalNetworkZoneAsync`, `PatchRegionalNetworkZoneAsync`); `Clients.AssignGroupToApplicationAsync` / `RemoveGroupFromApplicationAsync`; `Resources.CreateApiResourceSecretAsync` |
+
+Several request **fields** (e.g. `EnableConsent`, PAR/JAR, back-channel logout, extended refresh-token lifetimes) also carry tier gates even on otherwise-free endpoints. The `<note>…subscription…</note>` XML comments in the SDK source are the source of truth — see [`references/api-surface.md`](references/api-surface.md).
+
+## DI registration and HTTP-layer replacement
+
+`AddMonoCloudManagementClient` (static class `MonoCloudManagementServiceExtensions`, `namespace MonoCloud.Management`) has three overloads, all returning `IServiceCollection`:
+
+- `AddMonoCloudManagementClient(IConfiguration configuration)` — reads the `MonoCloud:Management` section.
+- `AddMonoCloudManagementClient(Action<MonoCloudManagementOptions> options)` — configure in code.
+- `AddMonoCloudManagementClient(IConfiguration? configuration, Action<MonoCloudManagementOptions>? options)` — both; options override configuration.
+
+It registers a named `HttpClient` (`"MonoCloudManagementClient"`) with `BaseAddress = {Domain}/api/`, `Timeout = config.Timeout`, and the `X-API-KEY` default header, then registers `MonoCloudManagementClient` as transient over `IHttpClientFactory`.
+
+**Bring-your-own `HttpClient`.** The `MonoCloudManagementClient(HttpClient httpClient)` constructor bypasses `MonoCloudConfig`, so you own the full pipeline (custom `HttpMessageHandler`, Polly policies, proxies, mTLS, test doubles). You **must** set `BaseAddress` (ending in `/api/`) and the `X-API-KEY` header yourself.
+
 ## Common pitfalls
 
-1. **Hardcoding the API key in `appsettings.json`.** Use User Secrets (`dotnet user-secrets set "MonoCloud:Management:ApiKey" "..."`) for dev and a secret manager (Azure Key Vault, AWS Secrets Manager, etc.) in production.
-2. **Trailing `/api/v1` on `Domain`.** Pass the bare tenant URL — the SDK appends `/api/`.
-3. **Mixing seconds vs milliseconds for timeout.** `MonoCloud:Management:Timeout` is **seconds**, mirroring `TimeSpan.FromSeconds`. Don't use ms here. (Fixed in 0.2.7 — the DI extension previously fed the value into a millisecond field; ensure you are on 0.2.7+ if you are seeing timeout values that look 1000× off.)
-4. **Sending immutable identifiers on `Patch…` requests.** As of 0.2.6, `Audience` was removed from `PatchApiResourceRequest`, and `Name` was removed from `PatchApiScopeRequest`, `PatchScopeRequest`, and `PatchClaimResourceRequest`. They are identifiers and cannot be changed. The C# property is gone — old code that set it will no longer compile.
-5. **Catching `Exception` everywhere.** Catch the specific `MonoCloudException` subclass — status-driven branching is the point.
-6. **Reading `ex.StatusCode`.** `MonoCloudException` has no `StatusCode` property; use `instanceof` against the subclass or read `(ex as MonoCloudRequestException)?.Response?.Status`.
-7. **Reading `response.Result`.** The body property is `Data`, not `Result`. Status is `Status`, not `StatusCode`. Headers is `IDictionary<string, IEnumerable<string>>`.
-8. **Creating a new `MonoCloudManagementClient` per request when using DI.** `AddMonoCloudManagementClient` already registers it transient over `IHttpClientFactory`. Don't `new` it inside controllers.
-9. **Calling `MonoCloud.Management.Core` types directly.** The core types are re-exported under `using MonoCloud.Management;` — don't add a project reference to the core package.
-10. **Using `NetworkZones` or `Resources.*ApiAccessPolicy*` endpoints without ScaleX.** These newer features require an active **ScaleX subscription** on the tenant; calls fail with a typed `MonoCloudForbiddenException` otherwise. Verify the tenant's plan before wiring them into production.
-11. **Setting `EnableConsent = true` on tenants without Secure+.** The `EnableConsent` property exists on `Application` / `CreateApplicationRequest` / `PatchApplicationRequest` for every tenant, but is only honored on **Secure+** subscriptions. The API rejects the request otherwise.
+1. **Hardcoding the API key in `appsettings.json`.** Use User Secrets for dev and a secret manager (Azure Key Vault, AWS Secrets Manager) in production.
+2. **Expecting env-var fallback.** Unlike the JS SDK, this SDK reads **no** `MONOCLOUD_MANAGEMENT_*` env vars itself. Feed values through `IConfiguration` (which can bind env vars via the `MonoCloud__Management__*` mapping) or the options action.
+3. **Trailing `/api` on `Domain`.** Pass the bare tenant URL — the SDK appends `/api/`.
+4. **Milliseconds vs seconds for timeout.** `MonoCloud:Management:Timeout` is **seconds** (mapped to `TimeSpan.FromSeconds`/`TotalSeconds`). The default is `10` — long-running admin calls may need it raised.
+5. **Sending immutable identifiers on `Patch…` requests.** Identifier fields were removed from PATCH request models in 0.2.6 (`Audience` from `PatchApiResourceRequest`; `Name` from `PatchApiScopeRequest`, `PatchScopeRequest`, `PatchClaimResourceRequest`). The C# property is gone — old code that set it won't compile.
+6. **Parameter-order gotchas in `ResourcesClient`.** `FindApiResourceSecretByIdAsync(secretId, apiId, …)` and the API-scope find/patch/delete methods take `(scopeId, apiId, …)` — the scope/secret id comes **before** `apiId`. But `DeleteApiResourceSecretAsync(apiId, secretId, …)` and the create methods take `apiId` first. Copy the signatures verbatim from [`references/api-surface.md`](references/api-surface.md).
+7. **`Guid` vs `string` ids.** Group ids and user identifier ids are `Guid` (`groupId`, `identifierId`, `logId`); user / application / resource / zone / trust-store / session ids are `string`.
+8. **Reading `response.Result` / `ex.StatusCode`.** The body is `.Data`, the status is `.Status`; `MonoCloudException` has no `StatusCode` — branch on the subclass or read `(ex as MonoCloudRequestException)?.Response?.Status`.
+9. **`new`-ing `MonoCloudManagementClient` per request under DI.** It's already registered transient over `IHttpClientFactory` — inject it, don't construct it in controllers.
+10. **Referencing `MonoCloud.Management.Core` directly.** The core types (`MonoCloudConfig`, `MonoCloudResponse<T>`, exceptions) come transitively with `MonoCloud.Management`; don't add a separate package reference.
+11. **Using ScaleX/Secure+ features without the tier.** `NetworkZones` create/patch, application↔group assignment, API-resource-secret creation, and consent/token endpoints throw `MonoCloudForbiddenException` (or 402) on lower plans. Verify the tenant's plan before wiring them into production.
 
 ## Onboarding checklist
 
 1. `dotnet add package MonoCloud.Management`.
 2. Create a Management API key in the MonoCloud dashboard.
-3. Configure `MonoCloud:Management:Domain` (in `appsettings.json` or config) and `MonoCloud:Management:ApiKey` (in User Secrets / Key Vault / env var).
+3. Set `MonoCloud:Management:Domain` (in `appsettings.json`/config) and `MonoCloud:Management:ApiKey` (in User Secrets / Key Vault / env var).
 4. `Program.cs`: `builder.Services.AddMonoCloudManagementClient(builder.Configuration)`.
-5. Inject `MonoCloudManagementClient` and call resource APIs.
-6. Wrap calls in `try/catch` against the specific `MonoCloudException` subclass(es) you handle.
-7. Run `node skills/monocloud-management-dotnet/scripts/verify.js` to confirm config + package installation.
+5. Inject `MonoCloudManagementClient` and call resource clients (`management.Users.GetAllUsersAsync(...)`, etc.).
+6. Read results from `response.Data` (and `response.PageData` for paginated lists).
+7. Wrap calls in `try/catch` against the specific `MonoCloudException` subclass(es) you handle.
+8. Run `node scripts/verify.js /path/to/project` to confirm package installation + config.
 
 ## Deeper reference
 
-- [`references/api-surface.md`](references/api-surface.md) — resource-by-resource method index.
-- [`references/troubleshooting.md`](references/troubleshooting.md) — symptom → cause → fix index for the most common failure modes (401s, missing `Domain`/`ApiKey` at startup, secret leaks in `appsettings.json`, hand-`new`ed clients vs DI, generic `catch (Exception)`, single-page reads).
+- [`references/api-surface.md`](references/api-surface.md) — every resource client and method, with verbatim signatures, response types, and subscription-tier notes.
+- [`references/troubleshooting.md`](references/troubleshooting.md) — symptom → cause → fix for the common failure modes (401/403, missing `Domain`/`ApiKey` at startup, secret leaks, hand-`new`ed clients vs DI, generic `catch (Exception)`, single-page reads).
