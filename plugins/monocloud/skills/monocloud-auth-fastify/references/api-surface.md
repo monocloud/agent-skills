@@ -107,7 +107,7 @@ interface MonoCloudBackendNodeClientOptions {
   tenantDomain: string;                // required (or env MONOCLOUD_BACKEND_TENANT_DOMAIN)
   audience: string;                    // required (or env MONOCLOUD_BACKEND_AUDIENCE)
   clientId?: string;                   // required for introspection
-  clientSecret?: string;
+  clientSecret?: string | Jwk;         // string, or a symmetric JWK; for spiffe_jwt pass the SPIFFE JWT-SVID string
   clientAuthMethod?: ClientAuthMethod; // default 'client_secret_post'
   groupOptions?: { groupsClaim?: string; matchAll?: boolean };
   clockSkew?: number;                  // default 0
@@ -115,7 +115,7 @@ interface MonoCloudBackendNodeClientOptions {
   jwksCacheDuration?: number;          // seconds
   metadataCacheDuration?: number;      // seconds
   introspectJwtTokens?: boolean;       // default false — force introspection for JWTs
-  cache?: ICache;                       // constructor-only token-claims cache
+  cache?: IIntrospectionCache;         // constructor-only introspection-results cache
   fetcher?: typeof fetch;              // i.e. (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 }
 
@@ -125,7 +125,9 @@ type ClientAuthMethod =
   | 'client_secret_jwt'
   | 'private_key_jwt'
   | 'tls_client_auth'
-  | 'self_signed_tls_client_auth';
+  | 'self_signed_tls_client_auth'
+  | 'spiffe_jwt'
+  | 'spiffe_x509';
 ```
 
 ### `ValidateAccessTokenOptions`
@@ -141,12 +143,12 @@ interface ValidateAccessTokenOptions {
 }
 ```
 
-### `ICache`
+### `IIntrospectionCache`
 
-Implement for Redis, in-memory, etc. The client keys on the raw token string and respects `claims.exp`.
+Implement for Redis, in-memory, etc. Caches introspection results only (opaque tokens, and JWTs when `introspectJwtTokens` is `true`); locally-validated JWTs are not cached. The client keys on the raw token string and respects `claims.exp`.
 
 ```ts
-interface ICache {
+interface IIntrospectionCache {
   get(key: string): Promise<AccessTokenClaims | null | undefined>;
   set(key: string, claims: AccessTokenClaims, expiresAt: number): Promise<void>;
   delete(key: string): Promise<void>;
@@ -163,7 +165,7 @@ Framework-agnostic; useful if you want full control or a shared instance across 
 class MonoCloudBackendNodeClient extends MonoCloudOidcBackendClient {
   constructor(options?: Partial<MonoCloudBackendNodeClientOptions>);
 
-  // Auto-detects JWT (3 segments) vs opaque and dispatches. Caches if ICache is set.
+  // Auto-detects JWT (3 segments) vs opaque and dispatches. Caches introspection results if an IIntrospectionCache is set.
   validateAccessToken(
     token: string,
     options?: ValidateAccessTokenOptions,
@@ -281,4 +283,4 @@ From `packages/node-backend/src/options/defaults.ts`:
 
 Constructor options always win over env vars.
 
-There is no env var for `cache`; pass an `ICache` implementation to the constructor when you need Redis, in-memory, or another shared token-claims cache.
+There is no env var for `cache`; pass an `IIntrospectionCache` implementation to the constructor when you need Redis, in-memory, or another shared introspection-results cache.

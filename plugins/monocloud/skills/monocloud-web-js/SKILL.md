@@ -128,7 +128,7 @@ Common optional:
 | `filteredIdTokenClaims` | protocol claims set     | Override the list of claims stripped from the user object.                                        |
 | `clientSecret`, `clientAuthMethod` | — | Confidential-client extras. **Do not use in a normal SPA** — secrets cannot be safely shipped to a browser. |
 
-Pre-configurable subset of authorization params (via `defaultAuthParams`): `scopes`, `resource`, `responseType`, `prompt`, `display`, `uiLocales`, `acrValues`, `maxAge`, `loginHint`, `authenticatorHint`. Per-request values (`state`, `nonce`, `codeChallenge`, `codeChallengeMethod`, `redirectUri`) are managed internally and cannot be overridden.
+Pre-configurable subset of authorization params (via `defaultAuthParams`): `scopes`, `resource`, `responseType`, `prompt`, `display`, `uiLocales`, `acrValues`, `maxAge`, `loginHint`, `authenticatorHint`, `audience`, `idTokenHint`. Per-request values (`state`, `nonce`, `codeChallenge`, `codeChallengeMethod`, `redirectUri`) are managed internally and cannot be overridden.
 
 ## `processCallback()` — wire this once at startup
 
@@ -192,6 +192,7 @@ await client.signOut();                                       // federated (clea
 await client.signOut({ mode: 'popup' });
 await client.signOut({ federatedSignOut: false });            // local-only — keeps the MonoCloud session
 await client.signOut({ postLogoutRedirectUri: 'https://example.com/bye' });
+await client.signOut({ idTokenHint: '<id-token>' });          // override the session's id_token_hint
 ```
 
 When `federatedSignOut` is `true` (the default) the SDK sends the user to MonoCloud's end-session endpoint, then back to `signOutPath`. When `false` the local session is cleared without contacting MonoCloud — useful when you want to log the user out of this app while leaving any other apps signed in.

@@ -41,7 +41,7 @@ Required only when validating **opaque tokens** (or when `MONOCLOUD_BACKEND_INTR
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `MONOCLOUD_BACKEND_CLIENT_ID`          | Client used to call the introspection endpoint                                                                                                         |
 | `MONOCLOUD_BACKEND_CLIENT_SECRET`      | Client secret                                                                                                                                          |
-| `MONOCLOUD_BACKEND_CLIENT_AUTH_METHOD` | One of `client_secret_basic`, `client_secret_post` (default), `client_secret_jwt`, `private_key_jwt`, `tls_client_auth`, `self_signed_tls_client_auth` |
+| `MONOCLOUD_BACKEND_CLIENT_AUTH_METHOD` | One of `client_secret_basic`, `client_secret_post` (default), `client_secret_jwt`, `private_key_jwt`, `tls_client_auth`, `self_signed_tls_client_auth`, `spiffe_jwt`, `spiffe_x509` |
 
 Optional tuning:
 
@@ -123,7 +123,7 @@ interface MonoCloudBackendNodeClientOptions {
   tenantDomain: string;
   audience: string;
   clientId?: string;
-  clientSecret?: string;
+  clientSecret?: string | Jwk;         // for spiffe_jwt, pass the SPIFFE JWT-SVID string
   clientAuthMethod?: ClientAuthMethod;
   groupOptions?: { groupsClaim?: string; matchAll?: boolean };
   clockSkew?: number;
@@ -131,12 +131,12 @@ interface MonoCloudBackendNodeClientOptions {
   jwksCacheDuration?: number;
   metadataCacheDuration?: number;
   introspectJwtTokens?: boolean;
-  cache?: ICache;
+  cache?: IIntrospectionCache;
   fetcher?: typeof fetch;              // (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 }
 ```
 
-`cache?: ICache` is constructor-only; pass it in code to cache validated access-token claims by raw token until the token expires.
+`cache?: IIntrospectionCache` is constructor-only; pass it in code to cache **introspection results** by raw token until the token expires. Only tokens validated via introspection are cached (opaque tokens, and JWTs when `introspectJwtTokens` is `true`); locally-validated JWTs are not cached.
 
 ## Default responses
 
@@ -195,13 +195,13 @@ fastify.register(async (instance) => {
 import {
   protectApi,
   MonoCloudBackendNodeClient,
-  type ICache,
+  type IIntrospectionCache,
 } from "@monocloud/backend-node/fastify";
 
 const client = new MonoCloudBackendNodeClient({
   tenantDomain: "https://acme.us.monocloud.com",
   audience: "https://api.example.com",
-  cache: redisCache, // your ICache implementation — caches by token until exp
+  cache: redisCache, // your IIntrospectionCache implementation — caches introspection results by token until exp
   introspectJwtTokens: false,
 });
 
@@ -221,10 +221,10 @@ fastify.get(
 );
 ```
 
-`ICache` interface (implement for Redis, in-memory, etc.):
+`IIntrospectionCache` interface (implement for Redis, in-memory, etc.) — stores introspection results only:
 
 ```ts
-interface ICache {
+interface IIntrospectionCache {
   get(token: string): Promise<AccessTokenClaims | null | undefined>;
   set(
     token: string,

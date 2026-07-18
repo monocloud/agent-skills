@@ -1,6 +1,6 @@
 ---
 name: monocloud-auth-react
-description: Use when integrating MonoCloud authentication into a React single-page application — installing or configuring `@monocloud/auth-react`, wrapping the tree in `<MonoCloudAuthProvider>` with `tenantDomain` / `clientId` / `appUrl`, reading auth state with `useAuth()` (`isLoading`, `isAuthenticated`, `user`, `session`) and calling its actions (`signIn`, `signOut`, `signInSilent`, `refreshSession`, `refetchUserInfo`, `getTokens`), rendering `<SignIn>` / `<SignUp>` / `<SignOut>` buttons or `<Protected groups=…>` gates, mounting `<ProcessCallback>` on a dedicated callback route with `autoProcessCallback={false}`, accessing the underlying `MonoCloudWebJSClient` with `useClient()`, integrating with React Router via `postCallback`, or troubleshooting "useAuth used outside provider", StrictMode double-callbacks, popup-blocker / iframe issues, or `login_required` from silent sign-in.
+description: Use when integrating MonoCloud authentication into a React single-page application — installing or configuring `@monocloud/auth-react`, wrapping the tree in `<MonoCloudAuthProvider>` with `tenantDomain` / `clientId` / `appUrl`, reading auth state with `useAuth()` (`isLoading`, `isAuthenticated`, `user`, `session`) and calling its actions (`signIn`, `signOut`, `signInSilent`, `refreshSession`, `refetchUserInfo`, `getTokens`), rendering `<SignIn>` / `<SignUp>` / `<SignOut>` buttons (with `audience` / `idTokenHint` auth params) or `<Protected groups=…>` gates, mounting `<ProcessCallback>` on a dedicated callback route with `autoProcessCallback={false}`, accessing the underlying `MonoCloudWebJSClient` with `useClient()`, integrating with React Router via `postCallback`, or troubleshooting "useAuth used outside provider", StrictMode double-callbacks, popup-blocker / iframe issues, or `login_required` from silent sign-in.
 license: MIT
 ---
 
@@ -210,6 +210,8 @@ import { SignIn, SignUp, SignOut } from '@monocloud/auth-react';
 <SignIn mode="popup" loginHint="alice@example.com">Sign in (popup)</SignIn>
 <SignIn authenticatorHint="google" className="btn btn-primary">Continue with Google</SignIn>
 <SignIn returnUrl="/dashboard">Sign in & go to dashboard</SignIn>
+<SignIn audience="https://api.example.com">Sign in (audience-scoped token)</SignIn>
+<SignIn idTokenHint={idToken} prompt="none">Silent re-auth</SignIn>
 <SignUp returnUrl="/welcome">Create account</SignUp>
 ```
 
@@ -222,6 +224,7 @@ import { SignIn, SignUp, SignOut } from '@monocloud/auth-react';
 <SignOut mode="popup">Sign out (popup)</SignOut>
 <SignOut federatedSignOut={false}>Local sign out only</SignOut>
 <SignOut postLogoutRedirectUri="https://example.com/bye">Sign out and leave</SignOut>
+<SignOut idTokenHint={idToken}>Sign out with explicit id_token_hint</SignOut>
 ```
 
 Accepts every `SignOutOptions` field plus button props.

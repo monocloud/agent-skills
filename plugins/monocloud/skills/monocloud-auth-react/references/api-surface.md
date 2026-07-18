@@ -184,7 +184,7 @@ interface SignUpProps
 
 Both render a `<button type="button">` that, on click, calls `signIn(options)` (with `signUp: true` for `<SignUp>`). All non-option props (`className`, `style`, `disabled`, `aria-*`, `data-*`, etc.) are forwarded to the button. They do not render an `<a>` — if you need a link, call `signIn` from your own component.
 
-Props passthrough to the underlying `signIn()` call: `authenticatorHint`, `maxAge`, `loginHint`, `uiLocales`, `mode`, `acrValues`, `display`, `prompt`, `resource`, `returnUrl`, `scopes`, `appState` (and `signUp` is hard-coded for `<SignUp>`).
+Props passthrough to the underlying `signIn()` call: `authenticatorHint`, `maxAge`, `loginHint`, `uiLocales`, `mode`, `acrValues`, `display`, `prompt`, `resource`, `audience`, `idTokenHint`, `returnUrl`, `scopes`, `appState` (and `signUp` is hard-coded for `<SignUp>`).
 
 ## `<SignOut>`
 
@@ -196,7 +196,7 @@ interface SignOutProps
 }
 ```
 
-Renders a `<button type="button">` that calls `signOut({ postLogoutRedirectUri, mode, federatedSignOut, returnUrl })` on click. Other button props are forwarded.
+Renders a `<button type="button">` that calls `signOut({ idTokenHint, postLogoutRedirectUri, mode, federatedSignOut, returnUrl })` on click. `idTokenHint` supplies a manual `id_token_hint` that overrides the current session's ID token on the logout request. Other button props are forwarded.
 
 ## `<Protected>`
 

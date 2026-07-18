@@ -195,6 +195,8 @@ type DefaultAuthParams = Pick<
   | 'maxAge'
   | 'loginHint'
   | 'authenticatorHint'
+  | 'audience'
+  | 'idTokenHint'
 >;
 ```
 
@@ -230,6 +232,8 @@ interface SignInOptions {
   maxAge?: number;
   scopes?: string;                    // merged with defaultAuthParams.scopes
   resource?: string;                  // merged with defaultAuthParams.resource
+  audience?: string;                  // target API (audience) for the issued access token
+  idTokenHint?: string;               // previously issued ID token, sent as id_token_hint
   returnUrl?: string;                 // surfaced to postCallback
   appState?: ApplicationState;        // surfaced to onSessionCreating
 }
@@ -254,6 +258,7 @@ Always runs with `prompt=none` and through a hidden iframe.
 
 ```ts
 interface SignOutOptions {
+  idTokenHint?: string;               // sent as id_token_hint; overrides the current session's ID token
   mode?: 'redirect' | 'popup';
   federatedSignOut?: boolean;         // overrides the client-level setting per call
   postLogoutRedirectUri?: string;     // must be registered in the dashboard

@@ -202,8 +202,10 @@ Subset of OIDC authorization parameters supported by client-side helpers and pro
 interface ExtraAuthParams {
   scopes?: string;
   resource?: string;
-  prompt?: 'none' | 'login' | 'consent' | 'select_account' | 'create';
-  display?: 'page' | 'popup' | 'touch' | 'wap';
+  audience?: string;
+  idTokenHint?: string;
+  prompt?: 'none' | 'login' | 'consent' | 'select_account' | 'create' | (string & {});
+  display?: 'page' | 'popup' | 'touch' | 'wap' | (string & {});
   uiLocales?: string;
   acrValues?: string[];
   authenticatorHint?: string;

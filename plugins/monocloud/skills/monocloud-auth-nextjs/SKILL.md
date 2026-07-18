@@ -384,7 +384,7 @@ Do not do this **in addition** to `authMiddleware()` — pick one. The default a
 
 ## Onboarding checklist for a fresh integration
 
-1. `npm install @monocloud/auth-nextjs` (or pnpm/yarn).
+1. `npm install @monocloud/auth-nextjs` (or pnpm/yarn). Requires **Node.js ≥ 20**.
 2. Add the five required env vars to `.env.local`. Generate `MONOCLOUD_AUTH_COOKIE_SECRET` with `openssl rand -hex 32`.
 3. In the MonoCloud dashboard, add `http://localhost:3000/api/auth/callback` to allowed redirect URIs and `http://localhost:3000` to allowed post-logout URIs.
 4. Create `src/proxy.ts` (Next 16+) **or** `src/middleware.ts` (Next ≤15) with `export default authMiddleware()` and the recommended `config.matcher`.

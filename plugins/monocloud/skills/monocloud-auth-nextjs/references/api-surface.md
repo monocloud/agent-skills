@@ -136,16 +136,19 @@ interface AuthorizationParams {
   acrValues?: string[];
   nonce?: string;
   uiLocales?: string;
-  display?: DisplayOptions;              // 'page' | 'popup' | 'touch' | 'wap'
-  prompt?: Prompt;                       // 'none' | 'login' | 'consent' | 'select_account' | 'create'
+  display?: DisplayOptions;              // 'page' | 'popup' | 'touch' | 'wap' | (string & {}) — open union
+  prompt?: Prompt;                       // 'none' | 'login' | 'consent' | 'select_account' | 'create' | (string & {}) — open union
   requestUri?: string;                   // PAR — set by SDK after pushing
   resource?: string;                     // space-separated audience URIs
+  audience?: string;                     // target API audience — sent as `audience`
+  idTokenHint?: string;                  // previously-issued ID token — sent as `id_token_hint`
 }
 
 interface ExtraAuthParams extends Pick<
   AuthorizationParams,
   | 'scopes' | 'resource' | 'prompt' | 'display' | 'uiLocales'
   | 'acrValues' | 'authenticatorHint' | 'maxAge' | 'loginHint'
+  | 'audience' | 'idTokenHint'
 > {}
 
 interface Indicator {
@@ -209,8 +212,7 @@ type SameSiteValues = 'strict' | 'lax' | 'none';
 
 type Authenticators =
   | 'password' | 'passkey' | 'email' | 'phone'
-  | 'google' | 'apple' | 'facebook' | 'microsoft' | 'github'
-  | 'gitlab' | 'discord' | 'twitter' | 'linkedin' | 'xero';
+  | (string & {});                       // open union — any other configured connection name (social/enterprise)
 ```
 
 `session.store` persists session data outside cookie-only storage, for example in Redis or a database. It is constructor-only; there is no `MONOCLOUD_AUTH_*` env var for a custom store.
@@ -332,6 +334,7 @@ interface SignOutProps {
   children: React.ReactNode;
   postLogoutUrl?: string;
   federated?: boolean;
+  idTokenHint?: string;                 // previously-issued ID token — sent as `id_token_hint`, overrides the session's ID token
 }
 ```
 
