@@ -16,7 +16,7 @@
         "path": "plugins/monocloud"
       },
       "description": "MonoCloud skills for authentication and Management API integrations across Next.js, React, vanilla browser SPAs, Express, Fastify, Node.js, and .NET.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "repository": "https://github.com/monocloud/agent-skills.git",
       "license": "MIT",
       "author": {
