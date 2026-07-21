@@ -40,8 +40,14 @@ Required only when validating **opaque tokens** (or when `MONOCLOUD_BACKEND_INTR
 | Variable                               | Purpose                                                                                                                                                |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `MONOCLOUD_BACKEND_CLIENT_ID`          | Client used to call the introspection endpoint                                                                                                         |
-| `MONOCLOUD_BACKEND_CLIENT_SECRET`      | Client secret                                                                                                                                          |
+| `MONOCLOUD_BACKEND_CLIENT_SECRET`      | Client secret. When `clientAuthMethod` is `private_key_jwt`, provide the private-key JWK as a JSON string (parsed and validated automatically).         |
 | `MONOCLOUD_BACKEND_CLIENT_AUTH_METHOD` | One of `client_secret_basic`, `client_secret_post` (default), `client_secret_jwt`, `private_key_jwt`, `tls_client_auth`, `self_signed_tls_client_auth`, `spiffe_jwt`, `spiffe_x509` |
+
+Required only when authenticating with a mutual-TLS client auth method (`tls_client_auth`, `self_signed_tls_client_auth`, `spiffe_x509`):
+
+| Variable                            | Purpose                                                                                                                                          |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MONOCLOUD_BACKEND_TRUST_STORE_ID`  | Selects a specific trust store's endpoints from `mtls_additional_endpoint_aliases`. When omitted, the default `mtls_endpoint_aliases` are used.   |
 
 Optional tuning:
 
@@ -52,8 +58,8 @@ Optional tuning:
 | `MONOCLOUD_BACKEND_CLOCK_TOLERANCE`         | `60`    | Extra tolerance on time-based claims (seconds)             |
 | `MONOCLOUD_BACKEND_GROUPS_CLAIM`            | `groups` | Claim name that carries group memberships                  |
 | `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL`        | `false` | If `true`, all listed groups must match                    |
-| `MONOCLOUD_BACKEND_JWKS_CACHE_DURATION`     | —       | Seconds to cache the JWKS                                  |
-| `MONOCLOUD_BACKEND_METADATA_CACHE_DURATION` | —       | Seconds to cache the OIDC discovery doc                    |
+| `MONOCLOUD_BACKEND_JWKS_CACHE_DURATION`     | `300`   | Seconds to cache the JWKS                                  |
+| `MONOCLOUD_BACKEND_METADATA_CACHE_DURATION` | `300`   | Seconds to cache the OIDC discovery doc                    |
 
 ## Basic wiring
 
@@ -115,8 +121,11 @@ interface MonoCloudBackendNodeClientOptions {
   tenantDomain: string;
   audience: string;
   clientId?: string;
-  clientSecret?: string;
+  clientSecret?: string | Jwk;        // JSON-string JWK when clientAuthMethod is 'private_key_jwt'
   clientAuthMethod?: ClientAuthMethod;
+  trustStoreId?: string;               // mTLS: pick trust store from mtls_additional_endpoint_aliases
+  metadataResolver?: () => IssuerMetadata | Promise<IssuerMetadata>; // supply issuer metadata out-of-band
+  jwksResolver?: () => Jwks | Promise<Jwks>;                         // supply JWKS out-of-band
   groupOptions?: { groupsClaim?: string; matchAll?: boolean };
   clockSkew?: number;
   clockTolerance?: number;

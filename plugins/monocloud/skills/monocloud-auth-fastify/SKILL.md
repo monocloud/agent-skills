@@ -42,6 +42,7 @@ Required only when validating **opaque tokens** (or when `MONOCLOUD_BACKEND_INTR
 | `MONOCLOUD_BACKEND_CLIENT_ID`          | Client used to call the introspection endpoint                                                                                                         |
 | `MONOCLOUD_BACKEND_CLIENT_SECRET`      | Client secret                                                                                                                                          |
 | `MONOCLOUD_BACKEND_CLIENT_AUTH_METHOD` | One of `client_secret_basic`, `client_secret_post` (default), `client_secret_jwt`, `private_key_jwt`, `tls_client_auth`, `self_signed_tls_client_auth`, `spiffe_jwt`, `spiffe_x509` |
+| `MONOCLOUD_BACKEND_TRUST_STORE_ID`     | Selects a specific trust store's endpoints from `mtls_additional_endpoint_aliases` when the client authenticates to the introspection endpoint with a mutual-TLS method (`tls_client_auth`, `self_signed_tls_client_auth`, `spiffe_x509`). When omitted, the default `mtls_endpoint_aliases` are used. |
 
 Optional tuning:
 
@@ -125,6 +126,9 @@ interface MonoCloudBackendNodeClientOptions {
   clientId?: string;
   clientSecret?: string | Jwk;         // for spiffe_jwt, pass the SPIFFE JWT-SVID string
   clientAuthMethod?: ClientAuthMethod;
+  trustStoreId?: string;               // pick a trust store's mTLS endpoint aliases (mtls_additional_endpoint_aliases)
+  metadataResolver?: () => IssuerMetadata | Promise<IssuerMetadata>; // supply issuer metadata out-of-band
+  jwksResolver?: () => Jwks | Promise<Jwks>;                         // supply JWKS out-of-band
   groupOptions?: { groupsClaim?: string; matchAll?: boolean };
   clockSkew?: number;
   clockTolerance?: number;

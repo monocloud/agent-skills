@@ -107,8 +107,11 @@ interface MonoCloudBackendNodeClientOptions {
   tenantDomain: string;                // required (or env MONOCLOUD_BACKEND_TENANT_DOMAIN)
   audience: string;                    // required (or env MONOCLOUD_BACKEND_AUDIENCE)
   clientId?: string;                   // required for introspection
-  clientSecret?: string | Jwk;         // string, or a symmetric JWK; for spiffe_jwt pass the SPIFFE JWT-SVID string
+  clientSecret?: string | Jwk;         // string, or a JWK; for private_key_jwt pass the private-key JWK (JSON string via env, or object in code); for spiffe_jwt pass the SPIFFE JWT-SVID string
   clientAuthMethod?: ClientAuthMethod; // default 'client_secret_post'
+  trustStoreId?: string;               // env MONOCLOUD_BACKEND_TRUST_STORE_ID; selects mtls_additional_endpoint_aliases[trustStoreId]
+  metadataResolver?: () => IssuerMetadata | Promise<IssuerMetadata>; // out-of-band issuer metadata (code-only, no env var)
+  jwksResolver?: () => Jwks | Promise<Jwks>;                         // out-of-band JWKS (code-only, no env var)
   groupOptions?: { groupsClaim?: string; matchAll?: boolean };
   clockSkew?: number;                  // default 0
   clockTolerance?: number;             // default 60 (seconds)
@@ -273,6 +276,7 @@ From `packages/node-backend/src/options/defaults.ts`:
 | `MONOCLOUD_BACKEND_CLIENT_ID` | `clientId` | Required for introspection |
 | `MONOCLOUD_BACKEND_CLIENT_SECRET` | `clientSecret` | |
 | `MONOCLOUD_BACKEND_CLIENT_AUTH_METHOD` | `clientAuthMethod` | |
+| `MONOCLOUD_BACKEND_TRUST_STORE_ID` | `trustStoreId` | Selects `mtls_additional_endpoint_aliases[trustStoreId]` for mutual-TLS client auth; default uses `mtls_endpoint_aliases` |
 | `MONOCLOUD_BACKEND_GROUPS_CLAIM` | `groupOptions.groupsClaim` | |
 | `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL` | `groupOptions.matchAll` | Coerced to boolean |
 | `MONOCLOUD_BACKEND_CLOCK_SKEW` | `clockSkew` | Coerced to number |
@@ -283,4 +287,4 @@ From `packages/node-backend/src/options/defaults.ts`:
 
 Constructor options always win over env vars.
 
-There is no env var for `cache`; pass an `IIntrospectionCache` implementation to the constructor when you need Redis, in-memory, or another shared introspection-results cache.
+There is no env var for `cache`, `metadataResolver`, or `jwksResolver` — pass those to the constructor in code. `cache` takes an `IIntrospectionCache` implementation (Redis, in-memory, etc.); `metadataResolver` / `jwksResolver` supply the issuer metadata / JWKS out-of-band (e.g. for a private trust store not in the public discovery document or JWKS).

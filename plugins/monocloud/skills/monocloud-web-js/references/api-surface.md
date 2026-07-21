@@ -70,6 +70,7 @@ import type {
   Group,
   IdTokenClaims,
   IssuerMetadata,
+  MtlsEndpointAliases,
   SecurityAlgorithms,
   Jwk,
   Jwks,

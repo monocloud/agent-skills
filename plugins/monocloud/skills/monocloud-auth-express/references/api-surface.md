@@ -103,8 +103,11 @@ interface MonoCloudBackendNodeClientOptions {
   tenantDomain: string;                // required (or env MONOCLOUD_BACKEND_TENANT_DOMAIN)
   audience: string;                    // required (or env MONOCLOUD_BACKEND_AUDIENCE)
   clientId?: string;                   // required for introspection
-  clientSecret?: string;
+  clientSecret?: string | Jwk;         // JSON-string JWK required when clientAuthMethod is 'private_key_jwt'
   clientAuthMethod?: ClientAuthMethod; // default 'client_secret_post'
+  trustStoreId?: string;               // mTLS: selects trust store from mtls_additional_endpoint_aliases
+  metadataResolver?: () => IssuerMetadata | Promise<IssuerMetadata>; // supply issuer metadata out-of-band
+  jwksResolver?: () => Jwks | Promise<Jwks>;                         // supply JWKS out-of-band
   groupOptions?: { groupsClaim?: string; matchAll?: boolean };
   clockSkew?: number;                  // default 0
   clockTolerance?: number;             // default 60 (seconds)
@@ -125,6 +128,8 @@ type ClientAuthMethod =
   | 'spiffe_jwt'
   | 'spiffe_x509';
 ```
+
+mTLS endpoint aliases (RFC 8705): when `clientAuthMethod` is `tls_client_auth`, `self_signed_tls_client_auth`, or `spiffe_x509`, the token / introspection / revocation / device-authorization / PAR endpoints are resolved from `mtls_endpoint_aliases` in the issuer metadata (or from `mtls_additional_endpoint_aliases[trustStoreId]` when `trustStoreId` is set). If no matching alias is published, a `MonoCloudValidationError` is thrown — there is no silent fallback to the non-mTLS endpoint.
 
 ### `ValidateAccessTokenOptions`
 
@@ -267,8 +272,9 @@ From `packages/node-backend/src/options/defaults.ts`:
 | `MONOCLOUD_BACKEND_TENANT_DOMAIN` | `tenantDomain` | Required |
 | `MONOCLOUD_BACKEND_AUDIENCE` | `audience` | Required |
 | `MONOCLOUD_BACKEND_CLIENT_ID` | `clientId` | Required for introspection |
-| `MONOCLOUD_BACKEND_CLIENT_SECRET` | `clientSecret` | |
+| `MONOCLOUD_BACKEND_CLIENT_SECRET` | `clientSecret` | JSON-string JWK when `clientAuthMethod` is `private_key_jwt` (parsed automatically) |
 | `MONOCLOUD_BACKEND_CLIENT_AUTH_METHOD` | `clientAuthMethod` | |
+| `MONOCLOUD_BACKEND_TRUST_STORE_ID` | `trustStoreId` | mTLS: selects trust store from `mtls_additional_endpoint_aliases` |
 | `MONOCLOUD_BACKEND_GROUPS_CLAIM` | `groupOptions.groupsClaim` | |
 | `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL` | `groupOptions.matchAll` | Coerced to boolean |
 | `MONOCLOUD_BACKEND_CLOCK_SKEW` | `clockSkew` | Coerced to number |

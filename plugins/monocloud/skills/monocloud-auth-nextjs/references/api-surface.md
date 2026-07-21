@@ -68,10 +68,17 @@ Use the class when you need multiple configurations, dependency injection, or ex
 interface MonoCloudOptions {
   // Identity
   clientId?: string;
-  clientSecret?: string;
+  clientSecret?: string | Jwk;   // JWK (or JSON string via env) when clientAuthMethod is 'private_key_jwt'
+  clientAuthMethod?: ClientAuthMethod;  // default 'client_secret_basic'
+  trustStoreId?: string;         // selects mTLS endpoints from mtls_additional_endpoint_aliases (RFC 8705)
   tenantDomain?: string;
   appUrl?: string;
   cookieSecret?: string;
+
+  // Advanced / out-of-band resolvers (constructor-only; no env alias)
+  fetcher?: typeof fetch;
+  metadataResolver?: () => IssuerMetadata | Promise<IssuerMetadata>;
+  jwksResolver?: () => Jwks | Promise<Jwks>;
 
   // Routes
   routes?: Partial<MonoCloudRoutes>;
@@ -276,7 +283,7 @@ interface GetTokensOptions {
 
 **Re-exported from `@monocloud/auth-node-core`**:
 
-`MonoCloudOptions`, `MonoCloudSession`, `MonoCloudUser`, `MonoCloudTokens`, `AccessToken`, `GetSessionOptions`, `GetTokensOptions`, `ApplicationState`, `MonoCloudRequest`, `Indicator`, `MonoCloudSessionOptions`, `MonoCloudSessionOptionsBase`, `MonoCloudSessionStore`, `MonoCloudCookieOptions`, `SessionLifetime`, `SameSiteValues`, `UserinfoResponse`, `Address`, `Authenticators`, `DisplayOptions`, `AuthorizationParams`, `MonoCloudRoutes`, `MonoCloudStateOptions`, `MonoCloudStatePartialOptions`, `IdTokenClaims`, `Group`, `Jwk`, `Prompt`, `CodeChallengeMethod`, `ResponseTypes`, `ResponseModes`, `SecurityAlgorithms`, `OnSessionCreating`, `OnBackChannelLogout`, `OnSetApplicationState`.
+`MonoCloudOptions`, `MonoCloudSession`, `MonoCloudUser`, `MonoCloudTokens`, `AccessToken`, `GetSessionOptions`, `GetTokensOptions`, `ApplicationState`, `MonoCloudRequest`, `Indicator`, `MonoCloudSessionOptions`, `MonoCloudSessionOptionsBase`, `MonoCloudSessionStore`, `MonoCloudCookieOptions`, `SessionLifetime`, `SameSiteValues`, `UserinfoResponse`, `Address`, `Authenticators`, `DisplayOptions`, `AuthorizationParams`, `MonoCloudRoutes`, `MonoCloudStateOptions`, `MonoCloudStatePartialOptions`, `IdTokenClaims`, `Group`, `Jwk`, `Jwks`, `IssuerMetadata`, `MtlsEndpointAliases`, `Prompt`, `CodeChallengeMethod`, `ResponseTypes`, `ResponseModes`, `SecurityAlgorithms`, `OnSessionCreating`, `OnBackChannelLogout`, `OnSetApplicationState`.
 
 ## `@monocloud/auth-nextjs/client`
 
@@ -408,6 +415,7 @@ From `packages/node-core/src/options/defaults.ts`:
     cookie: { httpOnly: true, name: 'state', path: '/', sameSite: 'lax', persistent: false },
   },
   idTokenSigningAlg: 'RS256',
+  clientAuthMethod: 'client_secret_basic',
 }
 ```
 
@@ -420,7 +428,9 @@ Every scalar option has a `MONOCLOUD_AUTH_*` env var alias (constructor options 
 | Env var | Maps to | Notes |
 |---|---|---|
 | `MONOCLOUD_AUTH_CLIENT_ID` | `clientId` | Required |
-| `MONOCLOUD_AUTH_CLIENT_SECRET` | `clientSecret` | Required for confidential clients |
+| `MONOCLOUD_AUTH_CLIENT_SECRET` | `clientSecret` | Required for confidential clients. For `private_key_jwt`, supply the private-key JWK as a JSON string — it is parsed + validated automatically |
+| `MONOCLOUD_AUTH_CLIENT_AUTH_METHOD` | `clientAuthMethod` | Default `client_secret_basic`. One of `client_secret_basic`, `client_secret_post`, `client_secret_jwt`, `private_key_jwt`, `tls_client_auth`, `self_signed_tls_client_auth`, `spiffe_jwt`, `spiffe_x509` |
+| `MONOCLOUD_AUTH_TRUST_STORE_ID` | `trustStoreId` | Selects the trust store whose endpoints are read from `mtls_additional_endpoint_aliases` when using a mutual-TLS client auth method (RFC 8705) |
 | `MONOCLOUD_AUTH_TENANT_DOMAIN` | `tenantDomain` | Required |
 | `MONOCLOUD_AUTH_APP_URL` | `appUrl` | Required |
 | `MONOCLOUD_AUTH_COOKIE_SECRET` | `cookieSecret` | Required. Validator only enforces ≥ 8 chars but you should use a 32-byte (64 hex char) secret from `openssl rand -hex 32`. |
