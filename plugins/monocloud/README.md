@@ -13,6 +13,7 @@ It ships as a native plugin for both **Claude Code** (via [`.claude-plugin/plugi
 | `monocloud-auth-react` | React SPA SDK — `<MonoCloudAuthProvider>`, `useAuth`, sign-in/up/out and protected components | `@monocloud/auth-react` |
 | `monocloud-auth-express` | JWT / introspection token validation, scope + group enforcement | `@monocloud/backend-node/express` |
 | `monocloud-auth-fastify` | Same engine as above, via a Fastify `onRequest` hook | `@monocloud/backend-node/fastify` |
+| `monocloud-auth-aspnetcore` | JWT / introspection access-token validation, scope + group authorization for ASP.NET Core APIs | `MonoCloud.Authentication.Api` |
 | `monocloud-web-js` | Browser SDK for vanilla JS / TS SPAs — redirect/popup/silent flows, sessions, pluggable storage | `@monocloud/auth-web-js` |
 | `monocloud-management-js` | Programmatic  API access for Node.js | `@monocloud/management` |
 | `monocloud-management-dotnet` | Programmatic  API access for C# with .NET DI registration | `MonoCloud.Management` |

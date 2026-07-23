@@ -1,6 +1,6 @@
 ---
 name: monocloud-quickstart
-description: Use this skill FIRST whenever a user asks to add MonoCloud (authentication or management) to a project but hasn't said which framework. It detects the project type by reading `package.json`, `*.csproj`, `requirements.txt`, etc., then routes to the correct framework-specific MonoCloud skill (`monocloud-auth-nextjs`, `monocloud-auth-react`, `monocloud-auth-express`, `monocloud-auth-fastify`, `monocloud-web-js`, `monocloud-management-js`, `monocloud-management-dotnet`). Also use when the user says "set up MonoCloud", "add MonoCloud login", "integrate MonoCloud", "use the MonoCloud SDK", or "manage users programmatically with MonoCloud" without naming a stack.
+description: Use this skill FIRST whenever a user asks to add MonoCloud (authentication or management) to a project but hasn't said which framework. It detects the project type by reading `package.json`, `*.csproj`, `requirements.txt`, etc., then routes to the correct framework-specific MonoCloud skill (`monocloud-auth-nextjs`, `monocloud-auth-react`, `monocloud-auth-express`, `monocloud-auth-fastify`, `monocloud-auth-aspnetcore`, `monocloud-web-js`, `monocloud-management-js`, `monocloud-management-dotnet`). Also use when the user says "set up MonoCloud", "add MonoCloud login", "integrate MonoCloud", "use the MonoCloud SDK", or "manage users programmatically with MonoCloud" without naming a stack.
 license: MIT
 ---
 
@@ -30,8 +30,10 @@ The detector handles these signals:
 | `"express"` in `package.json` (no `next`/`fastify`) | `monocloud-auth-express` |
 | `"react"` + browser bundler (vite/CRA/parcel/webpack) and no server framework | `monocloud-auth-react` |
 | Browser SPA with `vite`/`parcel`/`webpack`/`rollup` and no server framework (no React) | `monocloud-web-js` |
+| `*.csproj` referencing `MonoCloud.Authentication.Api` | `monocloud-auth-aspnetcore` |
 | `*.csproj` referencing `MonoCloud.Management` | `monocloud-management-dotnet` |
-| Any `*.csproj` (no MonoCloud yet, .NET project) | `monocloud-management-dotnet` (management) — for auth on .NET, MonoCloud doesn't yet ship a dedicated agent skill; use the docs link in the project. |
+| `*.csproj` with no MonoCloud package — ASP.NET Core web/API project (`Sdk="Microsoft.NET.Sdk.Web"` / references `Microsoft.AspNetCore.*`) | `monocloud-auth-aspnetcore` (to protect the API) — use `monocloud-management-dotnet` instead if the goal is programmatic tenant/user management |
+| Any other `*.csproj` (no MonoCloud yet, non-web .NET) | `monocloud-management-dotnet` (likely programmatic management) — use `monocloud-auth-aspnetcore` if it's actually an API to protect |
 
 If two skills could apply (e.g. an Express API in a Next.js monorepo), prefer the more specific match in the **app or package you're editing**, not the workspace root.
 
@@ -59,6 +61,7 @@ MonoCloud uses **prefix-namespaced** env vars per SDK. Don't mix them.
 | `MONOCLOUD_BACKEND_*` | `@monocloud/backend-node/{express,fastify}` (API token validation) |
 | `MONOCLOUD_MANAGEMENT_*` | `@monocloud/management` (JS Management API SDK) |
 | `MonoCloud:Management:*` (config keys, not env) | `MonoCloud.Management` (.NET Management API SDK) |
+| _(none)_ | `MonoCloud.Authentication.Api` — ASP.NET Core API auth, configured via `AddMonoCloudAuthentication(options => …)` / `IConfiguration` binding only |
 | _(none)_ | `@monocloud/auth-web-js` — pure browser SDK, configured via constructor options only |
 | _(none)_ | `@monocloud/auth-react` — React SPA SDK, configured via `<MonoCloudAuthProvider>` props only |
 
@@ -68,6 +71,7 @@ MonoCloud uses **prefix-namespaced** env vars per SDK. Don't mix them.
 - [`monocloud-auth-react`](../monocloud-auth-react/SKILL.md) — `@monocloud/auth-react` — React SPA SDK: `<MonoCloudAuthProvider>`, `useAuth`, `<SignIn>`/`<SignOut>`/`<Protected>` components.
 - [`monocloud-auth-express`](../monocloud-auth-express/SKILL.md) — JWT / introspection token validation, scope + group enforcement for Express APIs.
 - [`monocloud-auth-fastify`](../monocloud-auth-fastify/SKILL.md) — Same engine as above, with a Fastify `onRequest` hook.
+- [`monocloud-auth-aspnetcore`](../monocloud-auth-aspnetcore/SKILL.md) — `MonoCloud.Authentication.Api` — ASP.NET Core access-token validation (JWT + introspection), scope/group authorization via `[Authorize]` policies, `IIntrospectionCache` caching, mTLS certificate-bound tokens.
 - [`monocloud-web-js`](../monocloud-web-js/SKILL.md) — `@monocloud/auth-web-js` — browser SDK for vanilla JS / TS SPAs: redirect/popup/silent flows, sessions, pluggable storage.
 - [`monocloud-management-js`](../monocloud-management-js/SKILL.md) — `@monocloud/management` — programmatic admin: users, clients, groups, resources, keys, logs, options, branding, trust stores.
 - [`monocloud-management-dotnet`](../monocloud-management-dotnet/SKILL.md) — `MonoCloud.Management` NuGet — same surface in .NET with DI registration.

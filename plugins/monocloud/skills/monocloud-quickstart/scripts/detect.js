@@ -82,17 +82,24 @@ else if (
 
 // .NET signals.
 const csprojs = listFiles(ROOT, '.csproj', 3);
-if (csprojs.length) {
+if (csprojs.length && !skill) {
   note(`Found .csproj files: ${csprojs.length}`);
-  const referencesMgmt = csprojs.some((f) => /MonoCloud\.Management/i.test(safeRead(f) || ''));
-  if (referencesMgmt) {
-    if (!skill) {
-      skill = 'monocloud-management-dotnet';
-      note('.csproj references MonoCloud.Management');
-    }
-  } else if (!skill) {
+  const csprojText = csprojs.map((f) => safeRead(f) || '').join('\n');
+  const referencesAuth = /MonoCloud\.Authentication\.Api/i.test(csprojText);
+  const referencesMgmt = /MonoCloud\.Management/i.test(csprojText);
+  const isAspNetWeb = /Sdk\s*=\s*"Microsoft\.NET\.Sdk\.Web"/i.test(csprojText) || /Microsoft\.AspNetCore/i.test(csprojText);
+  if (referencesAuth) {
+    skill = 'monocloud-auth-aspnetcore';
+    note('.csproj references MonoCloud.Authentication.Api');
+  } else if (referencesMgmt) {
     skill = 'monocloud-management-dotnet';
-    note('.NET project detected with no MonoCloud package yet — use management-dotnet for now.');
+    note('.csproj references MonoCloud.Management');
+  } else if (isAspNetWeb) {
+    skill = 'monocloud-auth-aspnetcore';
+    note('ASP.NET Core web/API project detected with no MonoCloud package yet — use auth-aspnetcore to protect the API (use management-dotnet instead if the goal is programmatic tenant/user management).');
+  } else {
+    skill = 'monocloud-management-dotnet';
+    note('.NET project (non-web) detected with no MonoCloud package yet — likely programmatic management; use management-dotnet (or auth-aspnetcore if this is actually an API to protect).');
   }
 }
 
