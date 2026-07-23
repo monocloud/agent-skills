@@ -154,7 +154,6 @@ Implement for Redis, in-memory, etc. Caches introspection results only (opaque t
 interface IIntrospectionCache {
   get(key: string): Promise<AccessTokenClaims | null | undefined>;
   set(key: string, claims: AccessTokenClaims, expiresAt: number): Promise<void>;
-  delete(key: string): Promise<void>;
 }
 ```
 
