@@ -1,8 +1,8 @@
 {
   "name": "monocloud",
   "displayName": "MonoCloud",
-  "version": "0.2.2",
-  "description": "MonoCloud SDK agent skills. Detects your stack and routes to the right MonoCloud integration: @monocloud/auth-nextjs, @monocloud/auth-react, @monocloud/auth-web-js, @monocloud/backend-node (Express/Fastify), @monocloud/management, or MonoCloud.Management (.NET).",
+  "version": "0.3.0",
+  "description": "MonoCloud SDK agent skills. Detects your stack and routes to the right MonoCloud integration: @monocloud/auth-nextjs, @monocloud/auth-react, @monocloud/auth-web-js, @monocloud/backend-node (Express/Fastify), MonoCloud.Authentication.Api (ASP.NET Core), @monocloud/management, or MonoCloud.Management (.NET).",
   "author": {
     "name": "MonoCloud",
     "email": "support@monocloud.com",
@@ -24,7 +24,8 @@
     "vanilla-js",
     "express",
     "fastify",
-    "dotnet"
+    "dotnet",
+    "aspnetcore"
   ],
   "category": "authentication"
 }
