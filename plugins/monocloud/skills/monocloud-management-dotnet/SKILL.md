@@ -1,6 +1,6 @@
 ---
 name: monocloud-management-dotnet
-description: Use when calling the MonoCloud Management API from .NET — installing or configuring the `MonoCloud.Management` NuGet package, constructing `MonoCloudManagementClient` (direct or via DI with `AddMonoCloudManagementClient`), calling resource clients (`Users`, `Clients`, `Groups`, `Resources`, `Keys`, `Logs`, `NetworkZones`, `Options`, `Branding`, `TrustStores`) — including PKI/SPIFFE (mTLS) trust stores, external authenticators, network zones, and API access policies — reading `MonoCloudResponse<T>.Data` (and `PageData`/`PageModel` for paginated lists), catching `MonoCloudException` subclasses (`MonoCloudUnauthorizedException`, `MonoCloudForbiddenException`, `MonoCloudNotFoundException`, `MonoCloudIdentityValidationException`), or troubleshooting `MonoCloud:Management:Domain` / `MonoCloud:Management:ApiKey` / `Timeout` / 401 / 403 / 422 validation errors.
+description: Use when calling the MonoCloud Management API from .NET — installing or configuring the `MonoCloud.Management` NuGet package, constructing `MonoCloudManagementClient` (direct or via DI with `AddMonoCloudManagementClient`), calling resource clients (`Users`, `Clients`, `Groups`, `Resources`, `Keys`, `Logs`, `NetworkZones`, `Options`, `Branding`, `TrustStores`) — including PKI/SPIFFE (mTLS) trust stores, external identity providers, network zones, and API access policies — reading `MonoCloudResponse<T>.Data` (and `PageData`/`PageModel` for paginated lists), catching `MonoCloudException` subclasses (`MonoCloudUnauthorizedException`, `MonoCloudForbiddenException`, `MonoCloudNotFoundException`, `MonoCloudIdentityValidationException`), or troubleshooting `MonoCloud:Management:Domain` / `MonoCloud:Management:ApiKey` / `Timeout` / 401 / 403 / 422 validation errors.
 license: MIT
 ---
 
@@ -46,7 +46,7 @@ The SDK authenticates by sending the key in the `X-API-KEY` request header. It s
 
 ## Environment variables and configuration keys
 
-The .NET SDK (v0.2.10) reads configuration from the **`MonoCloud:Management`** section of `IConfiguration` — it does **not** read process environment variables on its own. You can still surface env vars through the standard ASP.NET Core configuration mapping (double-underscore).
+The .NET SDK (v0.2.11) reads configuration from the **`MonoCloud:Management`** section of `IConfiguration` — it does **not** read process environment variables on its own. You can still surface env vars through the standard ASP.NET Core configuration mapping (double-underscore).
 
 | Config key                     | Env-var form (ASP.NET Core)      | Required | Purpose                                             |
 | ------------------------------ | -------------------------------- | -------- | --------------------------------------------------- |
@@ -149,7 +149,7 @@ var management = new MonoCloudManagementClient(http);
 | `.Keys`         | Signing key material: list, rotate, revoke                                 | `KeysClient`         |
 | `.Logs`         | Audit / event logs: list, find                                             | `LogsClient`         |
 | `.NetworkZones` | IP + regional network zones (**ScaleX** for create/patch)                  | `NetworkZonesClient` |
-| `.Options`      | Tenant options: authentication, communication, sign-up custom fields        | `OptionsClient`      |
+| `.Options`      | Tenant options: authentication, communication, sign-up custom fields, external identity providers | `OptionsClient`      |
 | `.Branding`     | Branding options for pages, emails, SMS                                    | `BrandingClient`     |
 | `.TrustStores`  | PKI (mTLS) + SPIFFE trust stores, revocations, bans                        | `TrustStoresClient`  |
 

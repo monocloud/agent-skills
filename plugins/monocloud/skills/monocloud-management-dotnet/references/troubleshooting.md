@@ -1,6 +1,6 @@
 # Troubleshooting — `MonoCloud.Management`
 
-Quick reference for the most common issues calling the MonoCloud Management API from .NET, grounded in `MonoCloud.Management@0.2.10`. Each entry is **symptom → root cause → fix**.
+Quick reference for the most common issues calling the MonoCloud Management API from .NET, grounded in `MonoCloud.Management@0.2.11`. Each entry is **symptom → root cause → fix**.
 
 ## 401 Unauthorized on every call
 
@@ -36,7 +36,7 @@ When you pass both an `IConfiguration` and an options action, **options values o
 
 **Symptom:** You set `MONOCLOUD_MANAGEMENT_DOMAIN` / `MONOCLOUD_MANAGEMENT_API_KEY` (as the JS SDK uses) and the .NET client still throws that `Domain`/`ApiKey` is unset.
 
-**Cause:** The .NET SDK reads **no** environment variables of its own — there is no `MONOCLOUD_MANAGEMENT_*` fallback anywhere in `MonoCloud.Management@0.2.10` (unlike the JS SDK). Config comes only from the `MonoCloud:Management` configuration section, the `MonoCloudManagementOptions` action, or a directly-constructed `MonoCloudConfig`.
+**Cause:** The .NET SDK reads **no** environment variables of its own — there is no `MONOCLOUD_MANAGEMENT_*` fallback anywhere in `MonoCloud.Management@0.2.11` (unlike the JS SDK). Config comes only from the `MonoCloud:Management` configuration section, the `MonoCloudManagementOptions` action, or a directly-constructed `MonoCloudConfig`.
 
 **Fix:** Feed env values through the standard .NET configuration pipeline. On Linux/CI use the ASP.NET Core double-underscore convention so the environment-variables provider maps them into the `MonoCloud:Management` section:
 

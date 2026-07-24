@@ -1,6 +1,6 @@
 # `MonoCloud.Management` — API surface
 
-Exhaustive method-by-method surface for the `MonoCloud.Management` NuGet package, verified against `src/management/src/` and `src/core/` on **`MonoCloud.Management@0.2.10`** (repo HEAD `269ae64`, tag `v0.2.10`, clean tree). Signatures are listed **verbatim** from the client source, including default parameter values and the trailing `CancellationToken cancellationToken = default`. IDE intellisense (go-to-definition) is the source of truth for the fields of request/response DTOs under `MonoCloud.Management.Models`.
+Exhaustive method-by-method surface for the `MonoCloud.Management` NuGet package, verified against `src/management/src/` and `src/core/` on **`MonoCloud.Management@0.2.11`** (repo HEAD `245acc4`, tag `v0.2.11`, clean tree). Signatures are listed **verbatim** from the client source, including default parameter values and the trailing `CancellationToken cancellationToken = default`. IDE intellisense (go-to-definition) is the source of truth for the fields of request/response DTOs under `MonoCloud.Management.Models`.
 
 ## Quick reference
 
@@ -26,7 +26,7 @@ The public surface is split across these namespaces (the package does **not** pu
 | `MonoCloud.Management.Core.Models` | `ProblemDetails`, `IdentityValidationProblemDetails`, `KeyValidationProblemDetails`, `IdentityError` |
 | `MonoCloud.Management.Core.Helpers` | `PageModel`, `Optional<T>`, `IOptional` (plus JSON converters — rarely referenced directly) |
 | `MonoCloud.Management.Clients` | `UsersClient`, `ClientsClient`, `GroupsClient`, `ResourcesClient`, `KeysClient`, `LogsClient`, `NetworkZonesClient`, `OptionsClient`, `BrandingClient`, `TrustStoresClient` |
-| `MonoCloud.Management.Models` | All request / response DTOs (`User`, `CreateUserRequest`, `Application`, `Group`, `ApiResource`, `Log`, `KeyMaterial`, …) and enums (`ApplicationTypes`, `GrantTypes`, `ExternalAuthenticators`, …) — 242 model files |
+| `MonoCloud.Management.Models` | All request / response DTOs (`User`, `CreateUserRequest`, `Application`, `Group`, `ApiResource`, `Log`, `KeyMaterial`, …) and enums (`ApplicationTypes`, `GrantTypes`, `ExternalAuthenticators`, …) — 230 model files |
 
 Most consumer files will need at least `MonoCloud.Management`, `MonoCloud.Management.Core.Base`, `MonoCloud.Management.Core.Exception`, and `MonoCloud.Management.Models`. Project-wide `global using` declarations (.NET 6+) keep this tidy.
 
@@ -264,7 +264,7 @@ Sessions **[Pro]**:
 
 External authenticator:
 
-- `ExternalAuthenticatorDisconnectAsync(string userId, ExternalAuthenticatorDisconnectRequest externalAuthenticatorDisconnectRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>` — `req.Authenticator` is an `ExternalAuthenticators` enum.
+- `ExternalAuthenticatorDisconnectAsync(string userId, ExternalAuthenticatorDisconnectRequest externalAuthenticatorDisconnectRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>` — `req.Provider` (`string`) + `req.ProviderUserId` (`string`) identify the connection to remove.
 
 Group membership (queryable from both sides; `groupId` is a `Guid`):
 
@@ -423,7 +423,7 @@ Regional zones:
 
 ## `client.Options` — `OptionsClient`
 
-Tenant-wide options: authentication options, communication (email/SMS provider) options, and sign-up custom field CRUD. Per-provider authenticator/MFA *option shapes* ride on the option models rather than as discrete methods.
+Tenant-wide options: authentication options, communication (email/SMS provider) options, sign-up custom field CRUD, and external identity provider CRUD. Per-provider MFA *option shapes* (passkey/password/email/phone) ride on the option models rather than as discrete methods.
 
 - `FindAuthenticationOptionsAsync(CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<AuthenticationOptions>>`
 - `PatchAuthenticationOptionsAsync(PatchAuthenticationOptionsRequest patchAuthenticationOptionsRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<AuthenticationOptions>>`
@@ -434,9 +434,17 @@ Sign-up custom fields (keyed by `claimName`):
 
 - `GetAllSignUpCustomFieldsAsync(CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<SignUpCustomField>>>` (not paginated)
 - `CreateSignUpCustomFieldAsync(CreateSignUpCustomFieldRequest createSignUpCustomFieldRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<SignUpCustomField>>`
-- `FindSignUpCustomFieldByNameAsync(string claimName, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<SignUpCustomField>>`
+- `FindSignUpCustomFieldAsync(string claimName, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<SignUpCustomField>>`
 - `PatchSignUpCustomFieldAsync(string claimName, PatchSignUpCustomFieldRequest patchSignUpCustomFieldRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<SignUpCustomField>>`
 - `DeleteSignUpCustomFieldAsync(string claimName, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
+
+External identity providers (keyed by `providerName`; the list method keeps its `ExternalAuthenticators` name but now returns `ExternalProvider`):
+
+- `GetAllExternalAuthenticatorsAsync(CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<ExternalProvider>>>` (not paginated)
+- `CreateExternalProviderAsync(CreateExternalProviderRequest createExternalProviderRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ExternalProvider>>`
+- `FindExternalProviderAsync(string providerName, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ExternalProvider>>`
+- `PatchExternalProviderAsync(string providerName, PatchExternalProviderRequest patchExternalProviderRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ExternalProvider>>`
+- `DeleteExternalProviderAsync(string providerName, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
 
 ## `client.Branding` — `BrandingClient`
 
@@ -530,7 +538,7 @@ Group ids and user-identifier ids are `Guid` (`groupId`, `identifierId`, `logId`
 
 ## Environment variables / configuration
 
-**The .NET SDK (v0.2.10) reads no environment variables.** There is no `MONOCLOUD_MANAGEMENT_*` fallback anywhere in source (unlike the JS SDK). Config comes only from the `MonoCloud:Management` config section, a `MonoCloudManagementOptions` action, or a directly-constructed `MonoCloudConfig`.
+**The .NET SDK (v0.2.11) reads no environment variables.** There is no `MONOCLOUD_MANAGEMENT_*` fallback anywhere in source (unlike the JS SDK). Config comes only from the `MonoCloud:Management` config section, a `MonoCloudManagementOptions` action, or a directly-constructed `MonoCloudConfig`.
 
 | Source | Key / property | Required? | Purpose |
 |---|---|---|---|

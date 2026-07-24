@@ -1,6 +1,6 @@
 # Troubleshooting — `@monocloud/management`
 
-Quick reference for the most common things that go wrong when calling the MonoCloud Management API from Node.js. Each entry is **symptom → cause → fix**. Every symbol below is grounded in `@monocloud/management@0.2.10`; the full method surface lives in [`api-surface.md`](api-surface.md).
+Quick reference for the most common things that go wrong when calling the MonoCloud Management API from Node.js. Each entry is **symptom → cause → fix**. Every symbol below is grounded in `@monocloud/management@0.2.11`; the full method surface lives in [`api-surface.md`](api-surface.md).
 
 ## `init()` throws before any request is made
 
@@ -176,7 +176,7 @@ for (;;) {
 }
 ```
 
-Note a handful of list methods are **non-paginated** and return `MonoCloudResponse<T[]>` (no `pageData`): `clients.getAllApplicationSecrets`, `resources.getAllApiResourceSecrets`, `options.getAllSignUpCustomFields`, `trustStores.getAllPkiBannedCertificates`, `trustStores.getAllSpiffeBannedSvids`. Don't reach for `pageData` on those.
+Note a handful of list methods are **non-paginated** and return `MonoCloudResponse<T[]>` (no `pageData`): `clients.getAllApplicationSecrets`, `resources.getAllApiResourceSecrets`, `options.getAllSignUpCustomFields`, `options.getAllExternalAuthenticators`, `trustStores.getAllPkiBannedCertificates`, `trustStores.getAllSpiffeBannedSvids`. Don't reach for `pageData` on those.
 
 ## Reading `.data` instead of `.result`
 
@@ -211,7 +211,7 @@ A timeout surfaces as a base `MonoCloudException` (there is no dedicated timeout
 
 **Symptom:** A patch call fails type-checking on a field like `audience` (`PatchApiResourceRequest`) or `name` (`PatchApiScopeRequest`, `PatchScopeRequest`, `PatchClaimResourceRequest`) — "Object literal may only specify known properties".
 
-**Cause:** Those identifier fields are simply **not part of the `Patch…Request` interfaces** in this SDK — you cannot change them via a patch. In v0.2.10, for example, `PatchApiResourceRequest` exposes `display_name` and `allow_multi_audience` but no `audience`, and the scope/claim patch types expose `display_name` but no `name`. Older code (or stale training data) treats them as updatable.
+**Cause:** Those identifier fields are simply **not part of the `Patch…Request` interfaces** in this SDK — you cannot change them via a patch. In v0.2.11, for example, `PatchApiResourceRequest` exposes `display_name` and `allow_multi_audience` but no `audience`, and the scope/claim patch types expose `display_name` but no `name`. Older code (or stale training data) treats them as updatable.
 
 **Fix:** Drop the identifier from the patch body and send only mutable fields:
 

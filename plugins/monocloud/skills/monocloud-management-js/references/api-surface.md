@@ -1,6 +1,6 @@
 # `@monocloud/management` — API surface
 
-Exhaustive export list, verified against `packages/management/src/` and `packages/core/src/` on `@monocloud/management@0.2.10`. Methods are listed verbatim with positional parameters; TypeScript intellisense (`go-to-definition`) is the source of truth for full request/response model fields.
+Exhaustive export list, verified against `packages/management/src/` and `packages/core/src/` on `@monocloud/management@0.2.11`. Methods are listed verbatim with positional parameters; TypeScript intellisense (`go-to-definition`) is the source of truth for full request/response model fields.
 
 ## Quick reference
 
@@ -352,11 +352,19 @@ Sign-up custom fields:
 
 - `getAllSignUpCustomFields()` → `MonoCloudResponse<SignUpCustomField[]>` — **not paginated** (returns `MonoCloudResponse`, not `MonoCloudPageResponse`)
 - `createSignUpCustomField(createSignUpCustomFieldRequest: CreateSignUpCustomFieldRequest)` → `MonoCloudResponse<SignUpCustomField>`
-- `findSignUpCustomFieldByName(claimName: string)` → `MonoCloudResponse<SignUpCustomField>`
+- `findSignUpCustomField(claimName: string)` → `MonoCloudResponse<SignUpCustomField>`
 - `patchSignUpCustomField(claimName: string, patchSignUpCustomFieldRequest: PatchSignUpCustomFieldRequest)` → `MonoCloudResponse<SignUpCustomField>`
 - `deleteSignUpCustomField(claimName: string)` → `MonoCloudResponse<null>`
 
-`AuthenticationOptions` and `CommunicationOptions` are deep, nested models (authenticators, identifiers, password policy, session policy, sign-up, logout, email/SMS providers, …). Many of their sub-options are subscription-gated at the field level — see the [Subscription tiers](#subscription-tiers) note. There are no discrete methods for those sub-areas; you read/patch them through the two `*Options` models. Note this release exposes **no** external-authenticator CRUD methods on `OptionsClient`.
+External identity providers (the external authenticators end-users can sign in with):
+
+- `getAllExternalAuthenticators()` → `MonoCloudResponse<ExternalProvider[]>` — **not paginated** (method name kept, but now returns `ExternalProvider[]`)
+- `createExternalProvider(createExternalProviderRequest: CreateExternalProviderRequest)` → `MonoCloudResponse<ExternalProvider>`
+- `findExternalProvider(providerName: string)` → `MonoCloudResponse<ExternalProvider>`
+- `patchExternalProvider(providerName: string, patchExternalProviderRequest: PatchExternalProviderRequest)` → `MonoCloudResponse<ExternalProvider>`
+- `deleteExternalProvider(providerName: string)` → `MonoCloudResponse<null>`
+
+`AuthenticationOptions` and `CommunicationOptions` are deep, nested models (authenticators, identifiers, password policy, session policy, sign-up, logout, email/SMS providers, …). Many of their sub-options are subscription-gated at the field level — see the [Subscription tiers](#subscription-tiers) note. There are no discrete methods for those sub-areas; you read/patch them through the two `*Options` models. External identity providers, by contrast, are managed through their own dedicated methods (`getAllExternalAuthenticators` / `createExternalProvider` / `findExternalProvider` / `patchExternalProvider` / `deleteExternalProvider`, listed above).
 
 ## `client.branding` — `BrandingClient`
 

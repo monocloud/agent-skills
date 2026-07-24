@@ -1,6 +1,6 @@
 ---
 name: monocloud-management-js
-description: Use when calling the MonoCloud Management API from Node.js / TypeScript — installing or configuring `@monocloud/management`, initializing `MonoCloudManagementClient` via the static `init()` factory with `domain` + `apiKey`, calling the ten resource clients (`users`, `clients`, `groups`, `resources`, `keys`, `logs`, `options`, `branding`, `networkZones`, `trustStores`) — including IP/regional network zones, PKI & SPIFFE (mTLS) trust stores, API access policies, external authenticators, and grants/tokens — reading `.result` and looping paginated lists via `MonoCloudPageResponse.pageData`, handling `MonoCloudException` / `MonoCloudUnauthorizedException` / `MonoCloudPaymentRequiredException` / `MonoCloudIdentityValidationException` subclasses, or troubleshooting `MONOCLOUD_MANAGEMENT_DOMAIN` / `MONOCLOUD_MANAGEMENT_API_KEY` / `MONOCLOUD_MANAGEMENT_TIMEOUT` / 401 / 402 / 403 / 422 validation errors.
+description: Use when calling the MonoCloud Management API from Node.js / TypeScript — installing or configuring `@monocloud/management`, initializing `MonoCloudManagementClient` via the static `init()` factory with `domain` + `apiKey`, calling the ten resource clients (`users`, `clients`, `groups`, `resources`, `keys`, `logs`, `options`, `branding`, `networkZones`, `trustStores`) — including IP/regional network zones, PKI & SPIFFE (mTLS) trust stores, API access policies, external identity providers, and grants/tokens — reading `.result` and looping paginated lists via `MonoCloudPageResponse.pageData`, handling `MonoCloudException` / `MonoCloudUnauthorizedException` / `MonoCloudPaymentRequiredException` / `MonoCloudIdentityValidationException` subclasses, or troubleshooting `MONOCLOUD_MANAGEMENT_DOMAIN` / `MONOCLOUD_MANAGEMENT_API_KEY` / `MONOCLOUD_MANAGEMENT_TIMEOUT` / 401 / 402 / 403 / 422 validation errors.
 license: MIT
 ---
 
@@ -96,7 +96,7 @@ const management = MonoCloudManagementClient.init({
 | `.keys`         | `KeysClient`          | Signing key materials — list, rotate, revoke                                            | `clients/keys-api.ts`          |
 | `.logs`         | `LogsClient`          | Tenant audit / event logs                                                               | `clients/logs-api.ts`          |
 | `.networkZones` | `NetworkZonesClient`  | IP & regional network zones (**ScaleX**)                                                 | `clients/network-zones-api.ts` |
-| `.options`      | `OptionsClient`       | Tenant authentication & communication options, sign-up custom fields                    | `clients/options-api.ts`       |
+| `.options`      | `OptionsClient`       | Tenant authentication & communication options, sign-up custom fields, external identity providers | `clients/options-api.ts`       |
 | `.resources`    | `ResourcesClient`     | API resources, secrets, scopes, **API access policies**, standalone scopes, claim resources | `clients/resources-api.ts` |
 | `.trustStores`  | `TrustStoresClient`   | PKI & SPIFFE (mTLS) trust stores, revocations, banned certs/SVIDs                        | `clients/trust-stores-api.ts`  |
 | `.users`        | `UsersClient`         | Full user lifecycle, identifiers, passwords, data, sessions, grants/tokens              | `clients/users-api.ts`         |
@@ -153,7 +153,7 @@ async function* eachUser(management: MonoCloudManagementClient) {
 - `filter` — filter expression (varies per endpoint; see the API reference).
 - `sort` — `"<field>:<1 | -1>"` (1 = asc, -1 = desc).
 
-A few list methods are **non-paginated** and return `MonoCloudResponse<T[]>` (no `pageData`): `clients.getAllApplicationSecrets`, `resources.getAllApiResourceSecrets`, `options.getAllSignUpCustomFields`, `trustStores.getAllPkiBannedCertificates`, `trustStores.getAllSpiffeBannedSvids`.
+A few list methods are **non-paginated** and return `MonoCloudResponse<T[]>` (no `pageData`): `clients.getAllApplicationSecrets`, `resources.getAllApiResourceSecrets`, `options.getAllSignUpCustomFields`, `options.getAllExternalAuthenticators`, `trustStores.getAllPkiBannedCertificates`, `trustStores.getAllSpiffeBannedSvids`.
 
 ## Common operations
 

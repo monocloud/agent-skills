@@ -3,7 +3,7 @@
 // Usage: node skills/monocloud-management-dotnet/scripts/verify.js [project-dir]
 // Cross-platform: pure Node — no .NET tooling required to run.
 //
-// Grounded in MonoCloud.Management v0.2.10:
+// Grounded in MonoCloud.Management v0.2.11:
 //   - PackageReference id:   MonoCloud.Management
 //   - Config section:        MonoCloud:Management  (keys: Domain, ApiKey, Timeout)
 //   - DI extension:          AddMonoCloudManagementClient(...)
