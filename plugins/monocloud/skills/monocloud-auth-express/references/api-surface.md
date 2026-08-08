@@ -152,6 +152,7 @@ Implement for Redis, in-memory, etc. Only introspection results are cached (opaq
 interface IIntrospectionCache {
   get(key: string): Promise<AccessTokenClaims | null | undefined>;
   set(key: string, claims: AccessTokenClaims, expiresAt: number): Promise<void>;
+  delete(key: string): Promise<void>;
 }
 ```
 

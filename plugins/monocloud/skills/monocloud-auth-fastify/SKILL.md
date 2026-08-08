@@ -235,6 +235,7 @@ interface IIntrospectionCache {
     claims: AccessTokenClaims,
     expiresAt: number,
   ): Promise<void>;
+  delete(token: string): Promise<void>;
 }
 ```
 

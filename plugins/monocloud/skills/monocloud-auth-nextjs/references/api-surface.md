@@ -172,7 +172,9 @@ interface MonoCloudSessionOptions {
 }
 
 interface MonoCloudStatePartialOptions {
-  cookie?: Partial<MonoCloudCookieOptions>;
+  cookie?: Partial<MonoCloudStateCookieOptions>;
+  duration?: number;            // seconds; default 900 (15 min); min 300 (5 min) — lifetime of an authorization transaction
+  maxConcurrent?: number;       // 1–20; default 5 — concurrent sign-in transactions retained (earliest evicted first; 1 = sequential)
 }
 
 interface MonoCloudCookieOptions {
@@ -182,8 +184,11 @@ interface MonoCloudCookieOptions {
   httpOnly: boolean;            // default true (always true for state cookies)
   secure: boolean;              // inferred from appUrl scheme when not set
   sameSite: SameSiteValues;     // 'strict' | 'lax' | 'none'; default 'lax'
-  persistent: boolean;          // session default true; state default false
+  persistent: boolean;          // session default true — NOT present on state cookies
 }
+
+// State cookies omit `persistent` — they always expire with `state.duration`.
+type MonoCloudStateCookieOptions = Omit<MonoCloudCookieOptions, 'persistent'>;
 
 interface MonoCloudSessionStore {
   get(key: string): Promise<MonoCloudSession | undefined | null>;
@@ -283,7 +288,7 @@ interface GetTokensOptions {
 
 **Re-exported from `@monocloud/auth-node-core`**:
 
-`MonoCloudOptions`, `MonoCloudSession`, `MonoCloudUser`, `MonoCloudTokens`, `AccessToken`, `GetSessionOptions`, `GetTokensOptions`, `ApplicationState`, `MonoCloudRequest`, `Indicator`, `MonoCloudSessionOptions`, `MonoCloudSessionOptionsBase`, `MonoCloudSessionStore`, `MonoCloudCookieOptions`, `SessionLifetime`, `SameSiteValues`, `UserinfoResponse`, `Address`, `Authenticators`, `DisplayOptions`, `AuthorizationParams`, `MonoCloudRoutes`, `MonoCloudStateOptions`, `MonoCloudStatePartialOptions`, `IdTokenClaims`, `Group`, `Jwk`, `Jwks`, `IssuerMetadata`, `MtlsEndpointAliases`, `Prompt`, `CodeChallengeMethod`, `ResponseTypes`, `ResponseModes`, `SecurityAlgorithms`, `OnSessionCreating`, `OnBackChannelLogout`, `OnSetApplicationState`.
+`MonoCloudOptions`, `MonoCloudSession`, `MonoCloudUser`, `MonoCloudTokens`, `AccessToken`, `GetSessionOptions`, `GetTokensOptions`, `ApplicationState`, `MonoCloudRequest`, `Indicator`, `MonoCloudSessionOptions`, `MonoCloudSessionOptionsBase`, `MonoCloudSessionStore`, `MonoCloudCookieOptions`, `SessionLifetime`, `SameSiteValues`, `UserinfoResponse`, `Address`, `Authenticators`, `DisplayOptions`, `AuthorizationParams`, `MonoCloudRoutes`, `MonoCloudStateOptions`, `MonoCloudStatePartialOptions`, `MonoCloudStateCookieOptions`, `IdTokenClaims`, `Group`, `Jwk`, `Jwks`, `IssuerMetadata`, `MtlsEndpointAliases`, `Prompt`, `CodeChallengeMethod`, `ResponseTypes`, `ResponseModes`, `SecurityAlgorithms`, `OnSessionCreating`, `OnBackChannelLogout`, `OnSetApplicationState`.
 
 ## `@monocloud/auth-nextjs/client`
 
@@ -412,7 +417,9 @@ From `packages/node-core/src/options/defaults.ts`:
     maximumDuration: 7 * 24 * 60 * 60,   // 7 days
   },
   state: {
-    cookie: { httpOnly: true, name: 'state', path: '/', sameSite: 'lax', persistent: false },
+    cookie: { httpOnly: true, name: 'state', path: '/', sameSite: 'lax' },  // no `persistent` — state cookies always expire with state.duration
+    duration: 15 * 60,                   // 900s (15 min); min 300s (5 min)
+    maxConcurrent: 5,                    // 1–20 concurrent sign-in transactions retained
   },
   idTokenSigningAlg: 'RS256',
   clientAuthMethod: 'client_secret_basic',
@@ -468,7 +475,8 @@ Every scalar option has a `MONOCLOUD_AUTH_*` env var alias (constructor options 
 | `MONOCLOUD_AUTH_STATE_COOKIE_DOMAIN` | `state.cookie.domain` | |
 | `MONOCLOUD_AUTH_STATE_COOKIE_SECURE` | `state.cookie.secure` | Boolean |
 | `MONOCLOUD_AUTH_STATE_COOKIE_SAME_SITE` | `state.cookie.sameSite` | `strict` / `lax` / `none` |
-| `MONOCLOUD_AUTH_STATE_COOKIE_PERSISTENT` | `state.cookie.persistent` | Boolean |
+| `MONOCLOUD_AUTH_STATE_DURATION` | `state.duration` | Seconds; default `900` (15 min). Minimum `300` (5 min) — lifetime of an authorization transaction |
+| `MONOCLOUD_AUTH_STATE_MAX_CONCURRENT` | `state.maxConcurrent` | `1`–`20`; default `5` — concurrent sign-in transactions retained (earliest evicted first; `1` = sequential) |
 | `MONOCLOUD_AUTH_JWKS_CACHE_DURATION` | `jwksCacheDuration` | Seconds |
 | `MONOCLOUD_AUTH_METADATA_CACHE_DURATION` | `metadataCacheDuration` | Seconds |
 | `MONOCLOUD_AUTH_GROUPS_CLAIM` | `groupsClaim` (constructor fallback) | Default `'groups'`. Server-side fallback used by `protect*` / `isUserInGroup` when neither a per-call `groupsClaim` arg nor a constructor `MonoCloudOptions.groupsClaim` is set |
