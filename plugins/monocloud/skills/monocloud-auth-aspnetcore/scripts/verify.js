@@ -3,11 +3,12 @@
 // Usage: node skills/monocloud-auth-aspnetcore/scripts/verify.js [project-dir]
 // Cross-platform: pure Node — no .NET tooling required to run.
 //
-// Grounded in MonoCloud.Authentication.Api v0.1.1:
+// Grounded in MonoCloud.Authentication.Api v0.1.3:
 //   - PackageReference id:   MonoCloud.Authentication.Api
 //   - Default scheme:        "MonoCloud" (MonoCloudAuthenticationDefaults.AuthenticationScheme)
 //   - DI extension:          AddAuthentication(scheme).AddMonoCloudAuthentication(options => { ... })
 //   - Pipeline:              app.UseAuthentication(); app.UseAuthorization();
+//   - Options base:          MonoCloudAuthenticationOptions : JwtBearerOptions (tenant domain set via inherited Authority)
 //   - Cache abstraction:     IIntrospectionCache (MUST be registered as a singleton)
 // This is an ASP.NET Core authentication HANDLER/scheme (built on JwtBearer), not a
 // middleware you write and not a management client. Authorization is done through the
@@ -103,7 +104,7 @@ if (hasAddMonoCloud) {
 } else if (csFiles.length) {
   fail(`No AddMonoCloudAuthentication(...) call found. Register the handler with `
     + `builder.Services.AddAuthentication(MonoCloudAuthenticationDefaults.AuthenticationScheme)`
-    + `.AddMonoCloudAuthentication(options => { options.TenantDomain = ...; options.Audience = ...; }).`);
+    + `.AddMonoCloudAuthentication(options => { options.Authority = ...; options.Audience = ...; }).`);
 }
 
 if (hasAddAuthentication && !hasAddMonoCloud) {
@@ -144,13 +145,13 @@ if (csFiles.length) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. TenantDomain + Audience configured (options code OR appsettings).
+// 4. Authority + Audience configured (options code OR appsettings).
 //    The SDK binds MonoCloudAuthenticationOptions; it reads no env vars of its own.
 // ---------------------------------------------------------------------------
-const optTenantInCode = /\bTenantDomain\b/.test(allCs);
+const optTenantInCode = /\bAuthority\b/.test(allCs);
 const optAudienceInCode = /\bAudience\b/.test(allCs);
 
-// Inspect appsettings*.json for a MonoCloud section carrying TenantDomain / Audience.
+// Inspect appsettings*.json for a MonoCloud section carrying Authority / Audience.
 const settingsFiles = listFiles(ROOT, '.json').filter((f) => /appsettings(\..+)?\.json$/i.test(path.basename(f)));
 let tenantInSettings = false;
 let audienceInSettings = false;
@@ -174,7 +175,7 @@ for (const f of settingsFiles) {
   let cfg;
   try { cfg = JSON.parse(t); } catch { continue; }
   const rel = path.relative(ROOT, f);
-  if (findKeyDeep(cfg, 'TenantDomain') !== undefined) { tenantInSettings = true; pass(`TenantDomain configured in ${rel}.`); }
+  if (findKeyDeep(cfg, 'Authority') !== undefined) { tenantInSettings = true; pass(`Authority configured in ${rel}.`); }
   if (findKeyDeep(cfg, 'Audience') !== undefined) { audienceInSettings = true; pass(`Audience configured in ${rel}.`); }
   const secretVal = findKeyDeep(cfg, 'ClientSecret');
   if (secretVal !== undefined) {
@@ -183,11 +184,11 @@ for (const f of settingsFiles) {
   }
 }
 
-if (optTenantInCode && !tenantInSettings) pass('TenantDomain referenced in source (options code).');
+if (optTenantInCode && !tenantInSettings) pass('Authority referenced in source (options code).');
 if (optAudienceInCode && !audienceInSettings) pass('Audience referenced in source (options code).');
 
 if (!optTenantInCode && !tenantInSettings) {
-  warn('No TenantDomain found in options code or appsettings. Set options.TenantDomain to your MonoCloud tenant root (e.g. https://<tenant>.us.monocloud.com) — it is the issuer and the base of the discovery URL. Required.');
+  warn('No Authority found in options code or appsettings. Set options.Authority to your MonoCloud tenant root (e.g. https://<tenant>.us.monocloud.com) — it is the issuer and the base of the discovery URL. Required.');
 }
 if (!optAudienceInCode && !audienceInSettings) {
   warn('No Audience found in options code or appsettings. Set options.Audience to your API identifier so incoming tokens are validated against the right audience.');
@@ -205,14 +206,14 @@ const introspectJwt = /\bIntrospectJwtTokens\b/.test(allCs);
 const opaqueImplied = hasClientId || hasClientAuthRef || introspectJwt;
 if (opaqueImplied) {
   if (introspectJwt) {
-    warn('IntrospectJwtTokens is referenced — all tokens (even JWTs) go through introspection, which requires TenantDomain + ClientId + a ClientAuth.');
+    warn('IntrospectJwtTokens is referenced — all tokens (even JWTs) go through introspection, which requires Authority + ClientId + a ClientAuth.');
   }
   if (hasClientId && !hasClientAuthRef) {
     warn('ClientId is configured but no ClientAuth is set. The introspection path needs both — set options.ClientAuth (e.g. new ClientSecretAuth("<secret>")). Missing ClientAuth throws ArgumentNullException at request time.');
   } else if (hasClientAuthRef && !hasClientId) {
     warn('A ClientAuth is configured but no ClientId is set. Every ClientAuth implementation needs options.ClientId; introspection throws ArgumentNullException without it.');
   } else if (hasClientId && hasClientAuthRef) {
-    pass(`Introspection configured: ClientId + ClientAuth${clientAuthUsed.length ? ` (${clientAuthUsed.join(', ')})` : ''}. Ensure TenantDomain is also set.`);
+    pass(`Introspection configured: ClientId + ClientAuth${clientAuthUsed.length ? ` (${clientAuthUsed.join(', ')})` : ''}. Ensure Authority is also set.`);
   }
 }
 

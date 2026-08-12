@@ -1,6 +1,6 @@
 # Troubleshooting — `MonoCloud.Authentication.Api`
 
-Quick reference for the most common things that go wrong when validating MonoCloud-issued access tokens in an ASP.NET Core API, grounded in `MonoCloud.Authentication.Api@0.1.1`. Each entry is **symptom → root cause → fix**.
+Quick reference for the most common things that go wrong when validating MonoCloud-issued access tokens in an ASP.NET Core API, grounded in `MonoCloud.Authentication.Api@0.1.3`. Each entry is **symptom → root cause → fix**.
 
 This SDK is a standard ASP.NET Core **authentication handler / scheme** (built on `Microsoft.AspNetCore.Authentication.JwtBearer`), registered via `AddAuthentication(scheme).AddMonoCloudAuthentication(...)`. It only *authenticates* and shapes claims — authorization (scopes/groups) is the **standard** policy system (`AddAuthorization` / `[Authorize(Policy = …)]` / `RequireClaim`). There is no `protectApi` factory, no `[MonoCloudAuthorize]` attribute, and no environment-variable configuration — those belong to the Node express/fastify SDK, not this one.
 
@@ -44,31 +44,31 @@ builder.Services
 
 **Symptom:** A valid-looking JWT is rejected; `OnAuthenticationFailed` fires with a `SecurityTokenInvalidAudienceException` or `SecurityTokenInvalidIssuerException`.
 
-**Cause:** The token's `aud` doesn't match `Audience` (which `PostConfigure` copies into `JwtTokenValidationParameters.ValidAudience`), or the discovery issuer doesn't match the token's `iss`. `TenantDomain` is the authority: the handler builds the discovery URL as `TenantDomain + "/.well-known/openid-configuration"` and appends the discovered `Issuer` to `ValidIssuers`.
+**Cause:** The token's `aud` doesn't match `Audience` (which the framework's `JwtBearerPostConfigureOptions` copies into `TokenValidationParameters.ValidAudience`), or the discovery issuer doesn't match the token's `iss`. `Authority` is the tenant domain: the base `JwtBearerHandler` builds the discovery URL as `Authority + "/.well-known/openid-configuration"`.
 
 **Fix:**
 
 1. Decode the token (jwt.io or `dotnet`), compare `aud` against `options.Audience` — it must match **exactly**, including scheme and trailing slash (`https://api.example.com/` ≠ `https://api.example.com`).
-2. Set `TenantDomain` to the bare tenant root, e.g. `https://acme.us.monocloud.com` — **not** the `.well-known` URL. `PostConfigure` prepends `https://` if you omit it.
-3. `Audience` only feeds `ValidAudience` when `JwtTokenValidationParameters.ValidAudience` is empty. If you set `ValidAudience` directly, that wins and `Audience` is ignored.
+2. Set `Authority` to the bare tenant root, e.g. `https://acme.us.monocloud.com` — **not** the `.well-known` URL. Post-configuration prepends `https://` if you omit the scheme.
+3. `Audience` only feeds `ValidAudience` when `TokenValidationParameters.ValidAudience`/`ValidAudiences` is empty. If you set them directly, that wins and `Audience` is ignored.
 
 ```csharp
-options.TenantDomain = "https://acme.us.monocloud.com";
+options.Authority = "https://acme.us.monocloud.com";
 options.Audience = "https://api.example.com";
 ```
 
 ## 401 on opaque/reference tokens (JWTs work fine)
 
-**Symptom:** Short opaque tokens fail while JWTs succeed. `OnAuthenticationFailed` reports `"Introspection failed"`, or startup/request throws `ArgumentNullException` naming `ClientId`, `TenantDomain`, or `ClientAuth`.
+**Symptom:** Short opaque tokens fail while JWTs succeed. `OnAuthenticationFailed` reports `"Introspection failed"`, or startup/request throws `ArgumentNullException` naming `ClientId`, `Authority`, or `ClientAuth`.
 
-**Cause:** Opaque (reference) tokens are validated by RFC 7662 introspection, which requires all three: `TenantDomain`, `ClientId`, and a `ClientAuth`. The handler throws `ArgumentNullException("Client ID must be set")` / `("Tenant Domain must be set")` in `HandleOpaqueTokenAuthenticationAsync`, and `ArgumentNullException` for a null `ClientAuth` inside `IntrospectTokenAsync`. Pure local-JWT validation needs none of these.
+**Cause:** Opaque (reference) tokens are validated by RFC 7662 introspection, which requires all three: `Authority`, `ClientId`, and a `ClientAuth`. The handler throws `ArgumentNullException("Client ID must be set")` / `("Authority must be set")` in `HandleOpaqueTokenAuthenticationAsync`, and `ArgumentNullException` for a null `ClientAuth` inside `IntrospectTokenAsync`. Pure local-JWT validation needs none of these.
 
 **Fix:** Supply a client identity and authentication method for introspection:
 
 ```csharp
-options.TenantDomain = "https://acme.us.monocloud.com";
-options.ClientId     = builder.Configuration["MonoCloud:ClientId"];
-options.ClientAuth   = new ClientSecretAuth(builder.Configuration["MonoCloud:ClientSecret"]!);
+options.Authority  = "https://acme.us.monocloud.com";
+options.ClientId   = builder.Configuration["MonoCloud:ClientId"];
+options.ClientAuth = new ClientSecretAuth(builder.Configuration["MonoCloud:ClientSecret"]!);
 ```
 
 `ClientAuth` is one of `ClientSecretAuth`, `JwtAssertionAuth`, `TlsAuth`, `SpiffeJwtAuth`, or `SpiffeX509Auth`. If your tenant issues only JWT access tokens you can leave all three unset.
@@ -79,7 +79,7 @@ options.ClientAuth   = new ClientSecretAuth(builder.Configuration["MonoCloud:Cli
 
 **Cause:** By default, JWT-parseable tokens are validated locally (no network call); only opaque tokens are introspected.
 
-**Fix:** Set `options.IntrospectJwtTokens = true` to force **every** token through introspection. This requires `ClientId` + `TenantDomain` + `ClientAuth` (the opaque path). Cost: a network hop per request — pair it with `EnableCaching` (below) to bound the load.
+**Fix:** Set `options.IntrospectJwtTokens = true` to force **every** token through introspection. This requires `ClientId` + `Authority` + `ClientAuth` (the opaque path). Cost: a network hop per request — pair it with `EnableCaching` (below) to bound the load.
 
 ## `IIntrospectionCache not found` / DI scope-validation error at startup
 
@@ -98,11 +98,11 @@ builder.Services
     {
         options.EnableCaching = true;                 // master switch (default false)
         options.CacheDuration = TimeSpan.FromMinutes(5);
-        // …ClientId / ClientAuth / TenantDomain for the opaque path
+        // …ClientId / ClientAuth / Authority for the opaque path
     });
 ```
 
-`IIntrospectionCache` (namespace `MonoCloud.Authentication.Api.Shared`) has two methods — `Task<string?> GetAsync(string key, CancellationToken)` and `Task SetAsync(string key, string value, TimeSpan expiresIn, CancellationToken)` — a plain string key/value store; the SDK serializes/deserializes the claim list itself. Only introspection-validated tokens are cached (opaque tokens, plus JWTs when `IntrospectJwtTokens = true`); locally validated JWTs are never cached. A thrown `GetAsync` is caught and logged, then the request falls through to a live introspection, so a cache outage degrades gracefully rather than failing requests.
+`IIntrospectionCache` (namespace `MonoCloud.Authentication.Api.Shared`) has three methods — `Task<string?> GetAsync(string key, CancellationToken)`, `Task SetAsync(string key, string value, TimeSpan expiresIn, CancellationToken)`, and `Task DeleteAsync(string key, CancellationToken)` (added in 0.1.3, never called by the SDK — for consumer-side eviction) — a plain string key/value store; the SDK serializes/deserializes the claim list itself. Only introspection-validated tokens are cached (opaque tokens, plus JWTs when `IntrospectJwtTokens = true`); locally validated JWTs are never cached. A thrown `GetAsync` is caught and logged, then the request falls through to a live introspection, so a cache outage degrades gracefully rather than failing requests.
 
 ## Scope-based `[Authorize(Policy = …)]` never authorizes
 
@@ -212,6 +212,18 @@ If you leave mapping on, set `NameClaimType` / `RoleClaimType` to the mapped URI
 options.ClientAuth = new TlsAuth(clientCertificate);   // dedicated HttpClient built for you
 ```
 
+## 401 with a `WWW-Authenticate` header — reading the RFC 6750 challenge
+
+**Symptom:** A client sees `401` with a `WWW-Authenticate: Bearer error="invalid_token", error_description="…"` header and wants to know where the detail comes from, or wants to suppress the `error_description`.
+
+**Cause:** As of 0.1.3 the handler emits a standards-compliant RFC 6750 bearer challenge on 401. The `error_description` portion is gated by the inherited `IncludeErrorDetails` option, which **defaults to `true`**.
+
+**Fix:** Nothing is wrong — clients may parse `WWW-Authenticate` for the error. To omit `error_description` (e.g. to avoid leaking validation detail to callers), set:
+
+```csharp
+options.IncludeErrorDetails = false;
+```
+
 ## Tokens rejected just outside their validity window (clock skew)
 
 **Symptom:** Freshly issued or near-expiry JWTs intermittently fail with `SecurityTokenExpiredException` / `SecurityTokenNotYetValidException` on one server but not another.
@@ -278,11 +290,11 @@ Use `MonoCloud.Management` only to *call* the admin API (create users, list clie
 
 ## `NETSDK` / target-framework error — package won't restore
 
-**Symptom:** `error NU1202: Package MonoCloud.Authentication.Api 0.1.1 is not compatible with …`, or restore fails on an older project.
+**Symptom:** `error NU1202: Package MonoCloud.Authentication.Api 0.1.3 is not compatible with …`, or restore fails on an older project.
 
-**Cause:** The package targets **net6.0 through net10.0**. A project on `netstandard2.0`, `netcoreapp3.1`, `net5.0`, or `net framework` cannot consume it.
+**Cause:** The package targets **net8.0, net9.0 and net10.0** (the `net6.0`/`net7.0` targets were dropped in 0.1.3). A project on `net6.0`, `net7.0`, `netstandard2.0`, `netcoreapp3.1`, `net5.0`, or `net framework` cannot consume it.
 
-**Fix:** Target `net6.0` or newer:
+**Fix:** Target `net8.0` or newer:
 
 ```xml
 <TargetFramework>net8.0</TargetFramework>
