@@ -391,7 +391,7 @@ const { accessToken } = await getTokens({ resource: 'https://api.example.com' })
 
 ## Errors
 
-All errors extend `MonoCloudAuthBaseError` (which extends `Error`). They are re-exported from `@monocloud/auth-web-js`. Use `instanceof` to branch; there is no `statusCode` field.
+All errors extend `MonoCloudAuthBaseError` (which extends `Error`). They are re-exported from `@monocloud/auth-web-js`. Use `instanceof` to branch. `MonoCloudHttpError` exposes `.status` / `.statusText`, and every error carries a `.raw` (`{ status, statusText, headers, body }`) when it was derived from an unsuccessful HTTP response.
 
 | Class                       | Thrown for                                                                                  |
 | --------------------------- | ------------------------------------------------------------------------------------------- |

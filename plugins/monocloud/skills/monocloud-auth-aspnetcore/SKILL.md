@@ -147,7 +147,7 @@ Set `IntrospectJwtTokens = true` only when you specifically need server-side rev
 
 There is **no MonoCloud-specific authorization API**. The handler only authenticates and turns token data into claims; you enforce requirements with the **standard ASP.NET Core policy system** (`AddAuthorization` / policies / `[Authorize(Policy=…)]` / `RequireClaim`). (Contrast the Node Express/Fastify SDK, which uses a `protectApi({ scopes, groups })` factory — that does not exist here.)
 
-**How scopes become claims.** On the **opaque/introspection** path the `scope` response value (space-delimited string *or* JSON array) is split into **one `"scope"` claim per value**, so `RequireClaim("scope", "read:weather")` matches directly. On the **JWT** path scope claims arrive exactly as the JWT emits them — a space-delimited `scope` stays a **single** claim and is **not** auto-split, so a scope policy may need a custom requirement.
+**How scopes become claims.** On the **opaque/introspection** path the `scope` response value (space-delimited string *or* JSON array) is split into **one `"scope"` claim per value**, so `RequireClaim("scope", "read:weather")` matches directly. On the **JWT** path a space-delimited `scope` is now split the same way (aligned in 0.1.4), so `RequireClaim("scope", "read:weather")` matches per-value on both paths — no custom requirement needed.
 
 **How groups become claims.** Groups arrive under the token's group claim (MonoCloud uses `groups`). To have them expanded you **must** set `options.RoleClaimType = "groups"`. Group normalization then runs (on the opaque path it runs **only if `RoleClaimType` is non-null**) and expands a JSON-array group claim into individual claims: a string array becomes one claim per string; an array of `{id,name}` objects becomes **two** claims per group (one carrying the id, one the name) — so a policy can match either. Because `RoleClaimType` is the identity's role claim type, `[Authorize(Roles=…)]` and `User.IsInRole(...)` also work against groups.
 
@@ -251,7 +251,7 @@ options.CacheDuration  = TimeSpan.FromMinutes(5);
 options.CacheKeyPrefix = "api:";
 ```
 
-A Redis adapter is identical — `GetAsync` reads the string, `SetAsync` writes it with `expiresIn` as the key TTL. Notes: **only introspection-validated tokens are cached** (opaque tokens, plus JWTs when `IntrospectJwtTokens = true`); locally validated JWTs are never cached. Both active and inactive results are cached (inactive short-circuits a re-introspection). The default key is `CacheKeyPrefix + Base64(SHA256("{SchemeName}|{token}"))` — the scheme discriminator means multiple schemes never share entries. TTL is `min(CacheDuration, time-until-token-exp)`. A thrown `GetAsync` is caught and logged, then the handler falls through to a live introspection — a cache failure never fails the request.
+A Redis adapter is identical — `GetAsync` reads the string, `SetAsync` writes it with `expiresIn` as the key TTL. Notes: **only introspection-validated tokens are cached** (opaque tokens, plus JWTs when `IntrospectJwtTokens = true`); locally validated JWTs are never cached. Both active and inactive results are cached (inactive short-circuits a re-introspection). The default key is `CacheKeyPrefix + Base64(SHA256("{SchemeName}|{token}"))` — the scheme discriminator means multiple schemes never share entries. TTL is `min(CacheDuration, time-until-token-exp)`. A thrown `GetAsync` is caught and logged, then the handler falls through to a live introspection; a failing `SetAsync` (cache write) is likewise swallowed and logged (as of 0.1.4) — a cache failure never fails an otherwise-successful request.
 
 ## mTLS certificate-bound tokens
 
@@ -280,7 +280,7 @@ When the predicate returns `true`, the presented client cert's base64url SHA-256
 | --- | --- |
 | `OnMessageReceived` | First, before the token is read from the `Authorization` header. Set `context.Token` to supply it yourself, or `context.Result` to short-circuit. |
 | `OnTokenValidated` | After validation + principal built, on **both** paths. `context` is the framework `TokenValidatedContext`; `context.SecurityToken` holds the parsed JWT on the JWT path and is **`null` on the opaque path** — read claims off `context.Principal`. |
-| `OnAuthenticationFailed` | On any failure (validation error, introspection failure, inactive token, cert-binding failure). `context.Exception` carries the error; set `context.Result` to override. |
+| `OnAuthenticationFailed` | On any failure — JWT validation error, introspection **infrastructure** failure, inactive token, cert-binding failure. `context.Exception` carries the error. As of 0.1.4 token verdicts (`active:false`, cert-binding) yield a **401**, but introspection infrastructure failures (and exceptions thrown by opaque-path handlers) **rethrow → HTTP 500** unless you set `context.Result`. |
 | `OnChallenge` | Before the 401 `WWW-Authenticate` challenge is written. |
 | `OnForbidden` | On a 403. |
 
@@ -324,7 +324,7 @@ Read claims from `ClaimsPrincipal` — inject it in minimal APIs, or use `User` 
 app.MapGet("/api/profile", (ClaimsPrincipal user) => Results.Ok(new
 {
     Name   = user.Identity?.Name,                        // reflects NameClaimType
-    Scopes = user.FindAll("scope").Select(c => c.Value), // one claim per scope on the opaque path
+    Scopes = user.FindAll("scope").Select(c => c.Value), // one claim per scope on both paths
     Groups = user.FindAll("groups").Select(c => c.Value) // requires RoleClaimType = "groups"
 })).RequireAuthorization();
 
@@ -367,7 +367,7 @@ The cache key includes the scheme name, so schemes never share cached claims for
 2. **`EnableCaching = true` with no singleton cache.** Startup throws `ArgumentException("IIntrospectionCache not found...")`. Register `IIntrospectionCache` and it **must** be a singleton or DI scope validation fails.
 3. **Forgetting `RoleClaimType = "groups"`.** Without it, the `groups` claim stays a raw JSON-array string on the opaque path and `RequireClaim("groups", "admin")` never matches.
 4. **Indexing claims by short name with `MapInboundClaims` on (the default).** `sub`/`name`/etc. become long WS-* URIs on the JWT path. Set `MapInboundClaims = false` or use the mapped URIs. (Introspection claims are unaffected.)
-5. **JWT scopes aren't auto-split.** A space-delimited `scope` on the JWT path is one claim; only the introspection path splits scopes into per-value `"scope"` claims. Add a custom policy/requirement if you gate space-delimited JWT scopes.
+5. **Assuming JWT scopes stay unsplit.** As of 0.1.4 a space-delimited `scope` is split into per-value `"scope"` claims on **both** the JWT and introspection paths, so `RequireClaim("scope", "read:weather")` works uniformly — no custom requirement needed.
 6. **Passing the discovery URL as `Authority`.** Provide the tenant root (`https://acme.us.monocloud.com`); the SDK appends `/.well-known/openid-configuration` and prefixes `https://` if the scheme is missing.
 7. **`Audience` ignored.** It only feeds `ValidAudience` when `TokenValidationParameters.ValidAudience`/`ValidAudiences` is unset — setting them directly overrides `Audience`.
 8. **`UseAuthentication()`/`UseAuthorization()` order or omission.** Both are required, `UseAuthentication()` first, both after routing — otherwise `[Authorize]` yields 401/403 even for valid tokens.

@@ -4,17 +4,17 @@ Quick reference for the most common issues validating MonoCloud-issued access to
 
 ## 401 `invalid_audience`
 
-**Symptom:** Every request returns 401 with `error_description` mentioning the audience.
+**Symptom:** Every request returns `401 { "message": "unauthorized" }` (with `WWW-Authenticate: Bearer error="invalid_token"`). The response body carries no `error_description` — decode the token to confirm it is the audience.
 
 **Cause:** The token's `aud` claim doesn't match `MONOCLOUD_BACKEND_AUDIENCE`.
 
 **Fix:** Decode the token, compare the `aud` claim with the env var exactly (no trailing slash). The API resource's audience in the MonoCloud dashboard must match the env value byte-for-byte.
 
-## 401 on opaque tokens
+## 500 / 503 on opaque tokens
 
-**Symptom:** Reference (non-JWT) tokens fail with "introspection failed" or "client credentials required."
+**Symptom:** Reference (non-JWT) tokens fail. Missing introspection credentials now surface as `500 { "message": "internal server error" }` (`MonoCloudValidationError: Token introspection is not configured`); an introspection endpoint that rejects the client (`invalid_client`) or any other 4xx also surfaces as 500, while a network failure / 5xx / 429 from the endpoint surfaces as `503 { "message": "service unavailable" }`. (A genuinely inactive/invalid opaque token is still a 401.)
 
-**Cause:** Opaque tokens require introspection. Without `MONOCLOUD_BACKEND_CLIENT_ID` + `MONOCLOUD_BACKEND_CLIENT_SECRET`, the SDK can't introspect.
+**Cause:** Opaque tokens require introspection. Without `MONOCLOUD_BACKEND_CLIENT_ID` + `MONOCLOUD_BACKEND_CLIENT_SECRET`, the SDK now fails immediately with a configuration error instead of a misleading 401.
 
 **Fix:** Set both env vars to a confidential client that has the introspection scope. If you only issue JWTs, this won't apply.
 

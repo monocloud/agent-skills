@@ -9,7 +9,7 @@ The surface most apps actually reach for — full signatures and types follow be
 - `protectApi(options?)` / `protectApi(client, options?)` — returns a `ProtectMiddleware` factory; call it per route with `ProtectOptions` (`scopes`, `groups`, `validateCertificateBinding`).
 - `AuthenticatedExpressRequest` — cast `req` after `protectApi` to read `req.claims`.
 - `MonoCloudBackendNodeClient` — use when you need a shared instance or call `validateAccessToken` directly.
-- Errors: `MonoCloudTokenError` (→ 401 by default, → 403 for "missing required scopes/groups"), `MonoCloudValidationError`, `MonoCloudOPError`, `MonoCloudHttpError`.
+- Errors: `MonoCloudTokenError` (→ 401 by default, → 403 when `code` is `insufficient_scope`/`insufficient_groups`), `MonoCloudValidationError` and `MonoCloudOPError` (→ 500), `MonoCloudHttpError` (→ 503 when status is undefined / ≥500 / 429, else 500).
 
 ## Imports — what comes from where
 
@@ -74,7 +74,7 @@ Passed to `protectApi()` itself (controls token/cert extraction across all route
 
 ```ts
 interface ProtectApiRequestOptions<T> {
-  tokenResolver?: TokenResolver<T>;             // overrides default Authorization: Bearer extraction
+  tokenResolver?: TokenResolver<T>;             // overrides default Authorization: Bearer extraction; the returned token is trimmed before validation
   certificateResolver?: ClientCertificateResolver<T>;
 }
 
@@ -208,22 +208,29 @@ If you find yourself reaching for the parent class to "simplify," reconsider —
 ## Errors (re-exported from `@monocloud/auth-core`)
 
 ```ts
-class MonoCloudAuthBaseError extends Error {}
-class MonoCloudValidationError extends MonoCloudAuthBaseError {}  // bad config / empty token
-class MonoCloudTokenError extends MonoCloudAuthBaseError {}       // token invalid / missing scopes/groups
+class MonoCloudAuthBaseError extends Error {
+  readonly raw?: MonoCloudRawResponse;   // { status, statusText, headers, body } — only on errors from an unsuccessful HTTP response (repeated headers comma-joined, set-cookie excluded)
+}
+class MonoCloudValidationError extends MonoCloudAuthBaseError {}  // bad config / empty token / introspection not configured
+class MonoCloudTokenError extends MonoCloudAuthBaseError {        // token invalid / missing scopes/groups
+  readonly code: 'invalid_token' | 'insufficient_scope' | 'insufficient_groups';
+}
 class MonoCloudOPError extends MonoCloudAuthBaseError {           // OP returned an OAuth error
-  error: string;                                                   // OAuth `error` code (e.g. 'invalid_token')
+  error: string;                                                   // OAuth `error` code (401 from introspection → 'invalid_client')
   errorDescription?: string;                                       // optional `error_description` from the OP
 }
-class MonoCloudHttpError extends MonoCloudAuthBaseError {}        // network / unexpected status
+class MonoCloudHttpError extends MonoCloudAuthBaseError {         // network / unexpected status
+  get status(): number | undefined;                                // undefined on network failure
+  get statusText(): string | undefined;
+}
 ```
 
-`MonoCloudTokenError` messages the middleware specifically maps to 403 (instead of the default 401):
+`MonoCloudTokenError.code` values the middleware maps to 403 (instead of the default 401):
 
-- `'Token is missing required scopes'`
-- `'Token is missing required groups'`
+- `'insufficient_scope'` (message `'Token is missing required scopes'`)
+- `'insufficient_groups'` (message `'Token is missing required groups'`)
 
-Any other `MonoCloudTokenError` becomes 401.
+Any other `MonoCloudTokenError` (e.g. `code: 'invalid_token'`) becomes 401. The split is by `code`, not by the message string.
 
 ## Token-claim types (re-exported from `@monocloud/auth-core`)
 
@@ -245,7 +252,8 @@ interface AccessTokenClaims extends JwtClaims {
 }
 
 // Plus: Jwk, Jwks, JwsHeaderParameters, IssuerMetadata, IsUserInGroupOptions,
-//      IntrospectOptions, ValidateJwtAccessTokenOptions, MonoCloudOidcBackendClientOptions
+//      IntrospectOptions, ValidateJwtAccessTokenOptions, MonoCloudOidcBackendClientOptions,
+//      MonoCloudTokenErrorCode, MonoCloudRawResponse
 ```
 
 For mTLS / certificate-bound tokens, the `cnf` claim is accessed via the index signature as `claims['cnf']`. The validator checks `cnf['x5t#S256']` against the SHA-256 hash of the presented client certificate when `validateCertificateBinding` is `true`.

@@ -391,7 +391,11 @@ Fires every time the SDK is about to persist a new or updated session — after 
 ## Errors
 
 ```ts
-class MonoCloudAuthBaseError extends Error {}
+class MonoCloudAuthBaseError extends Error {
+  // Present only on errors derived from an unsuccessful HTTP response.
+  // Shape: { status, statusText, headers (repeated headers comma-joined, set-cookie excluded), body (unparsed) }.
+  readonly raw?: MonoCloudRawResponse;
+}
 
 class MonoCloudOPError extends MonoCloudAuthBaseError {
   error: string;                      // OAuth error code (e.g. 'login_required')
@@ -399,12 +403,17 @@ class MonoCloudOPError extends MonoCloudAuthBaseError {
 }
 
 class MonoCloudValidationError extends MonoCloudAuthBaseError {}
-class MonoCloudTokenError      extends MonoCloudAuthBaseError {}
-class MonoCloudHttpError       extends MonoCloudAuthBaseError {}
+class MonoCloudTokenError      extends MonoCloudAuthBaseError {
+  readonly code: 'invalid_token' | 'insufficient_scope' | 'insufficient_groups';
+}
+class MonoCloudHttpError       extends MonoCloudAuthBaseError {
+  get status(): number | undefined;     // from `raw`; undefined on a network failure
+  get statusText(): string | undefined;
+}
 class MonoCloudJsError         extends MonoCloudAuthBaseError {}
 ```
 
-No status-code field. Use `instanceof` to branch; for `MonoCloudOPError`, also branch on `.error` (`login_required`, `interaction_required`, `access_denied`, `invalid_grant`, etc.).
+Errors raised from an unsuccessful HTTP response carry a `raw` (`{ status, statusText, headers, body }`); `MonoCloudHttpError` also exposes `status` / `statusText` getters and `MonoCloudTokenError` a `code` discriminator. Use `instanceof` to branch; for `MonoCloudOPError`, also branch on `.error` (`login_required`, `interaction_required`, `access_denied`, `invalid_grant`, etc.).
 
 ## Response types and the auth code default
 

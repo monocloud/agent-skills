@@ -9,7 +9,7 @@ The surface most apps actually reach for — full signatures and types follow be
 - `protectApi(options?)` / `protectApi(client, options?)` — returns a `ProtectHook` factory; call it per route with `ProtectOptions` and register via `{ onRequest: protect(...) }` or `fastify.addHook('onRequest', protect(...))`.
 - `AuthenticatedFastifyRequest` — cast `request` after `protectApi` to read `request.claims`.
 - `MonoCloudBackendNodeClient` — use when you need a shared instance or call `validateAccessToken` directly.
-- Errors: same hierarchy as the Express skill — `MonoCloudTokenError` (→ 401 by default, → 403 for "missing required scopes/groups"), `MonoCloudValidationError`, `MonoCloudOPError`, `MonoCloudHttpError`.
+- Errors: same hierarchy as the Express skill — `MonoCloudTokenError` (mapped by its `code`: `insufficient_scope`/`insufficient_groups` → 403, `invalid_token` → 401), `MonoCloudValidationError` / `MonoCloudOPError` → 500, `MonoCloudHttpError` → 503 (network/5xx/429) or 500 (4xx). See the Errors section below for the full mapping.
 
 ## Imports — what comes from where
 
@@ -210,22 +210,28 @@ If you find yourself reaching for the parent class to "simplify," reconsider —
 ## Errors (re-exported from `@monocloud/auth-core`)
 
 ```ts
-class MonoCloudAuthBaseError extends Error {}
+class MonoCloudAuthBaseError extends Error {
+  readonly raw?: MonoCloudRawResponse;   // { status, statusText, headers, body } — only on errors from an unsuccessful HTTP response (repeated headers comma-joined; set-cookie excluded)
+}
 class MonoCloudValidationError extends MonoCloudAuthBaseError {}  // bad config / empty token
-class MonoCloudTokenError extends MonoCloudAuthBaseError {}       // token invalid / missing scopes/groups
+class MonoCloudTokenError extends MonoCloudAuthBaseError {        // token invalid / missing scopes/groups
+  readonly code: MonoCloudTokenErrorCode; // 'invalid_token' | 'insufficient_scope' | 'insufficient_groups'
+}
 class MonoCloudOPError extends MonoCloudAuthBaseError {           // OP returned an OAuth error
-  error: string;                                                   // OAuth `error` code (e.g. 'invalid_token')
+  error: string;                                                   // OAuth `error` code (e.g. 'invalid_token'); a 401 from the introspection endpoint is 'invalid_client'
   errorDescription?: string;                                       // optional `error_description` from the OP
 }
-class MonoCloudHttpError extends MonoCloudAuthBaseError {}        // network / unexpected status
+class MonoCloudHttpError extends MonoCloudAuthBaseError {         // network / unexpected status
+  get status(): number | undefined;                                // response status; undefined on network failure
+  get statusText(): string | undefined;
+}
 ```
 
-`MonoCloudTokenError` messages the hook specifically maps to 403 (instead of the default 401):
+`MonoCloudTokenError` carries a `code` discriminator, and the hook maps it to a status by `code` — not by message string:
 
-- `'Token is missing required scopes'`
-- `'Token is missing required groups'`
-
-Any other `MonoCloudTokenError` becomes 401.
+- `code: 'insufficient_scope'` (message `'Token is missing required scopes'`) → 403
+- `code: 'insufficient_groups'` (message `'Token is missing required groups'`) → 403
+- `code: 'invalid_token'` (any other token error) → 401
 
 ## Token-claim types (re-exported from `@monocloud/auth-core`)
 

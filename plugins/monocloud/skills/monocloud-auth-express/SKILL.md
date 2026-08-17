@@ -137,13 +137,15 @@ interface MonoCloudBackendNodeClientOptions {
 }
 ```
 
-`cache?: IIntrospectionCache` is constructor-only; pass it in code to cache introspection results by raw token until the token expires. Only tokens validated via introspection are cached (opaque tokens, and JWTs when `introspectJwtTokens` is `true`); locally-validated JWTs are never cached.
+`cache?: IIntrospectionCache` is constructor-only; pass it in code to cache introspection results by raw token until the token expires. Only tokens validated via introspection are cached (opaque tokens, and JWTs when `introspectJwtTokens` is `true`); locally-validated JWTs are never cached. On a cache **hit** the SDK still re-checks the requested `scopes`, `groups`, and certificate binding against the cached claims, so a cached entry never bypasses per-route authorization.
 
 ## Default responses
 
-- No `Authorization: Bearer <token>` header (and no custom `tokenResolver`): `401 { "message": "unauthorized" }`
-- Token validation fails (signature, audience, issuer, expiry, mismatched cnf, etc.): `401 { "message": "unauthorized" }`
-- Token is valid but missing required scopes or groups: `403 { "message": "forbidden" }`
+- No `Authorization: Bearer <token>` header (and no custom `tokenResolver`): `401 { "message": "unauthorized" }` with a `WWW-Authenticate: Bearer` header.
+- Token validation fails (signature, audience, issuer, expiry, mismatched cnf, etc.): `401 { "message": "unauthorized" }` with `WWW-Authenticate: Bearer error="invalid_token"`.
+- Token is valid but missing required scopes or groups: `403 { "message": "forbidden" }` with `WWW-Authenticate: Bearer error="insufficient_scope"`.
+- Authorization-server unreachable / 5xx / 429 (network or outage): `503 { "message": "service unavailable" }` (no `WWW-Authenticate`).
+- Introspection or config failure (`MonoCloudValidationError`, `MonoCloudOPError`, or a non-5xx `MonoCloudHttpError`): `500 { "message": "internal server error" }`.
 
 The middleware does not call `next(err)` — it sends the response directly. If you want custom error responses, wrap the middleware or implement your own using `MonoCloudBackendNodeClient.validateAccessToken()`.
 
@@ -228,7 +230,7 @@ Caching is keyed on the raw token string. The exact validity check is `cached.ex
 - If the token has three dot-separated parts (`xxx.yyy.zzz`) **and** `introspectJwtTokens` is false (default): the SDK validates the JWT locally using JWKS fetched from the tenant. No network call per request after the JWKS cache warms.
 - Otherwise (opaque tokens, or `introspectJwtTokens=true`): the SDK calls the OIDC introspection endpoint. Requires `clientId` + `clientSecret` (or another `clientAuthMethod`).
 
-This means: **JWT tokens don't require client credentials.** Opaque tokens do. If you see `MonoCloudValidationError: The clientId option must be configured to introspect access tokens` when receiving opaque tokens, set the introspection env vars.
+This means: **JWT tokens don't require client credentials.** Opaque tokens do. If you see `MonoCloudValidationError: Token introspection is not configured` when receiving opaque tokens, set the introspection env vars. A token requiring introspection now fails immediately when no `clientId` is configured, and the middleware surfaces this as **500**, not 401.
 
 ## Common pitfalls
 
@@ -256,7 +258,7 @@ Re-exported from `@monocloud/auth-core` via `@monocloud/backend-node`:
 - `AccessTokenClaims`, `JwtClaims`, `Jwk`, `Jwks`, `IssuerMetadata`, `ClientAuthMethod`
 - `MonoCloudAuthBaseError`, `MonoCloudValidationError`, `MonoCloudOPError`, `MonoCloudHttpError`, `MonoCloudTokenError`
 
-A failed scope/group check throws `MonoCloudTokenError` with the message `'Token is missing required scopes'` or `'Token is missing required groups'` — these get converted to 403 by the middleware. Other validation failures throw `MonoCloudTokenError` or `MonoCloudValidationError` and become 401.
+A failed scope/group check throws `MonoCloudTokenError` with `code` `'insufficient_scope'` or `'insufficient_groups'` (messages `'Token is missing required scopes'` / `'Token is missing required groups'`) — the middleware maps those two **codes** (not the message strings) to 403. Any other `MonoCloudTokenError` (e.g. `code: 'invalid_token'`) becomes 401. `MonoCloudValidationError` and `MonoCloudOPError` now map to **500**, and a `MonoCloudHttpError` with no status / a 5xx / a 429 maps to **503**.
 
 ## Deeper reference
 

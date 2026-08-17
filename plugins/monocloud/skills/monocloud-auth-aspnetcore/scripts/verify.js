@@ -3,7 +3,7 @@
 // Usage: node skills/monocloud-auth-aspnetcore/scripts/verify.js [project-dir]
 // Cross-platform: pure Node — no .NET tooling required to run.
 //
-// Grounded in MonoCloud.Authentication.Api v0.1.3:
+// Grounded in MonoCloud.Authentication.Api v0.1.4:
 //   - PackageReference id:   MonoCloud.Authentication.Api
 //   - Default scheme:        "MonoCloud" (MonoCloudAuthenticationDefaults.AuthenticationScheme)
 //   - DI extension:          AddAuthentication(scheme).AddMonoCloudAuthentication(options => { ... })

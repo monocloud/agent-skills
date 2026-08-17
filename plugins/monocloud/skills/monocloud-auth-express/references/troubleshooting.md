@@ -2,9 +2,9 @@
 
 Quick reference for the most common things that go wrong when validating MonoCloud-issued access tokens in an Express API. Most issues fall into one of three buckets: **audience mismatch**, **token-format/introspection mis-config**, or **scope/group enforcement quirks**.
 
-## 401 `invalid_audience`
+## 401 on audience mismatch (`invalid_token`)
 
-**Symptom:** Every request fails with `WWW-Authenticate: Bearer error="invalid_token", error_description="aud"` or a JSON error mentioning the audience.
+**Symptom:** Every request fails with `401 { "message": "unauthorized" }` and a `WWW-Authenticate: Bearer error="invalid_token"` header. The mismatch is thrown internally as `MonoCloudTokenError('Invalid audience claim')`; the HTTP body is always the generic `{ "message": "unauthorized" }` (no `error_description`, no audience detail).
 
 **Cause:** The token's `aud` claim doesn't match `MONOCLOUD_BACKEND_AUDIENCE`.
 
@@ -14,11 +14,11 @@ Quick reference for the most common things that go wrong when validating MonoClo
 2. Compare the `aud` claim with the env value. It must match **exactly**, including scheme.
 3. If the API resource you registered in MonoCloud has audience `https://api.example.com`, set `MONOCLOUD_BACKEND_AUDIENCE=https://api.example.com`. Common trailing-slash gotcha: `https://api.example.com/` ≠ `https://api.example.com`.
 
-## 401 on opaque tokens but JWTs work fine
+## 500/503 on opaque tokens but JWTs work fine
 
-**Symptom:** Tokens shorter than ~150 chars (no dots) fail with "introspection failed" or "client credentials required."
+**Symptom:** Opaque (no-dot) tokens fail with `500 { "message": "internal server error" }` (missing or invalid introspection config) or `503 { "message": "service unavailable" }` (auth server unreachable), while JWTs validate locally.
 
-**Cause:** Opaque (reference) tokens must be introspected, which requires `MONOCLOUD_BACKEND_CLIENT_ID` and `MONOCLOUD_BACKEND_CLIENT_SECRET`.
+**Cause:** Opaque (reference) tokens must be introspected, which requires `MONOCLOUD_BACKEND_CLIENT_ID` and `MONOCLOUD_BACKEND_CLIENT_SECRET`. With no `clientId`, validation now fails immediately with `MonoCloudValidationError: Token introspection is not configured` (→ 500). Wrong credentials make the OP return a 401 → `MonoCloudOPError('invalid_client')` (→ 500); an outage / 5xx / 429 → 503.
 
 **Fix:** Set both env vars to a confidential client that has the introspection scope in the MonoCloud dashboard. If you don't issue opaque tokens, no action needed.
 

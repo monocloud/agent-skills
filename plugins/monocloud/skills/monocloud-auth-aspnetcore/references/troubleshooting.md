@@ -1,6 +1,6 @@
 # Troubleshooting — `MonoCloud.Authentication.Api`
 
-Quick reference for the most common things that go wrong when validating MonoCloud-issued access tokens in an ASP.NET Core API, grounded in `MonoCloud.Authentication.Api@0.1.3`. Each entry is **symptom → root cause → fix**.
+Quick reference for the most common things that go wrong when validating MonoCloud-issued access tokens in an ASP.NET Core API, grounded in `MonoCloud.Authentication.Api@0.1.4`. Each entry is **symptom → root cause → fix**.
 
 This SDK is a standard ASP.NET Core **authentication handler / scheme** (built on `Microsoft.AspNetCore.Authentication.JwtBearer`), registered via `AddAuthentication(scheme).AddMonoCloudAuthentication(...)`. It only *authenticates* and shapes claims — authorization (scopes/groups) is the **standard** policy system (`AddAuthorization` / `[Authorize(Policy = …)]` / `RequireClaim`). There is no `protectApi` factory, no `[MonoCloudAuthorize]` attribute, and no environment-variable configuration — those belong to the Node express/fastify SDK, not this one.
 
@@ -57,9 +57,9 @@ options.Authority = "https://acme.us.monocloud.com";
 options.Audience = "https://api.example.com";
 ```
 
-## 401 on opaque/reference tokens (JWTs work fine)
+## Opaque/reference tokens fail (JWTs work fine)
 
-**Symptom:** Short opaque tokens fail while JWTs succeed. `OnAuthenticationFailed` reports `"Introspection failed"`, or startup/request throws `ArgumentNullException` naming `ClientId`, `Authority`, or `ClientAuth`.
+**Symptom:** Short opaque tokens fail while JWTs succeed — the request returns **HTTP 500** (as of 0.1.4) with `OnAuthenticationFailed` carrying the real introspection exception (transport error, non-2xx response, malformed JSON, or client-auth failure), or throws `ArgumentNullException` naming `ClientId`, `Authority`, or `ClientAuth`.
 
 **Cause:** Opaque (reference) tokens are validated by RFC 7662 introspection, which requires all three: `Authority`, `ClientId`, and a `ClientAuth`. The handler throws `ArgumentNullException("Client ID must be set")` / `("Authority must be set")` in `HandleOpaqueTokenAuthenticationAsync`, and `ArgumentNullException` for a null `ClientAuth` inside `IntrospectTokenAsync`. Pure local-JWT validation needs none of these.
 
@@ -72,6 +72,22 @@ options.ClientAuth = new ClientSecretAuth(builder.Configuration["MonoCloud:Clien
 ```
 
 `ClientAuth` is one of `ClientSecretAuth`, `JwtAssertionAuth`, `TlsAuth`, `SpiffeJwtAuth`, or `SpiffeX509Auth`. If your tenant issues only JWT access tokens you can leave all three unset.
+
+## Introspection infrastructure failure returns 500, not 401
+
+**Symptom:** An opaque-token request returns **HTTP 500** instead of a `401`. `OnAuthenticationFailed` fires with a real exception — an `HttpRequestException` (transport error or non-2xx introspection response via `EnsureSuccessStatusCode`), a `JsonException` (malformed introspection JSON), a discovery error, or a client-auth failure.
+
+**Cause:** As of 0.1.4 the handler separates introspection **infrastructure** failures from token **verdicts**. Infrastructure failures — and exceptions thrown by your own opaque-path event handlers — raise `OnAuthenticationFailed` with the real exception and then **rethrow**, surfacing as a 500, instead of the old misleading 401 `invalid_token`. Genuine token verdicts (`active: false`, certificate-binding mismatch) still produce a `401`.
+
+**Fix:** A 500 here means introspection could not complete — verify the tenant is reachable, the introspection endpoint/credentials are correct, and the discovery document is valid. To restore the old behavior and turn an infrastructure failure back into a 401, handle `OnAuthenticationFailed` and set `context.Result`:
+
+```csharp
+options.Events.OnAuthenticationFailed = ctx =>
+{
+    ctx.Result = AuthenticateResult.Fail(ctx.Exception!);
+    return Task.CompletedTask;
+};
+```
 
 ## Need real-time revocation — introspect JWTs too
 
@@ -102,13 +118,13 @@ builder.Services
     });
 ```
 
-`IIntrospectionCache` (namespace `MonoCloud.Authentication.Api.Shared`) has three methods — `Task<string?> GetAsync(string key, CancellationToken)`, `Task SetAsync(string key, string value, TimeSpan expiresIn, CancellationToken)`, and `Task DeleteAsync(string key, CancellationToken)` (added in 0.1.3, never called by the SDK — for consumer-side eviction) — a plain string key/value store; the SDK serializes/deserializes the claim list itself. Only introspection-validated tokens are cached (opaque tokens, plus JWTs when `IntrospectJwtTokens = true`); locally validated JWTs are never cached. A thrown `GetAsync` is caught and logged, then the request falls through to a live introspection, so a cache outage degrades gracefully rather than failing requests.
+`IIntrospectionCache` (namespace `MonoCloud.Authentication.Api.Shared`) has three methods — `Task<string?> GetAsync(string key, CancellationToken)`, `Task SetAsync(string key, string value, TimeSpan expiresIn, CancellationToken)`, and `Task DeleteAsync(string key, CancellationToken)` (added in 0.1.3, never called by the SDK — for consumer-side eviction) — a plain string key/value store; the SDK serializes/deserializes the claim list itself. Only introspection-validated tokens are cached (opaque tokens, plus JWTs when `IntrospectJwtTokens = true`); locally validated JWTs are never cached. A thrown `GetAsync` is caught and logged, then the request falls through to a live introspection; a failing `SetAsync` write is likewise swallowed and logged (as of 0.1.4), so a cache outage degrades gracefully rather than failing requests.
 
 ## Scope-based `[Authorize(Policy = …)]` never authorizes
 
 **Symptom:** A policy like `RequireClaim("scope", "read:weather")` returns `403` even though the token clearly grants `read:weather`.
 
-**Cause:** How the `scope` value lands as claims differs by path. On the **opaque/introspection** path the `scope` response (a space-delimited string *or* JSON array) is split into **one `Claim` of type `"scope"` per value**, so `RequireClaim("scope", "read:weather")` matches directly. On the **local-JWT** path scopes are **not** auto-split — a space-delimited `scope` JWT claim stays a *single* claim value (`"read:weather write:weather"`), which `RequireClaim` compares whole and never matches an individual scope.
+**Cause:** How the `scope` value lands as claims. On the **opaque/introspection** path the `scope` response (a space-delimited string *or* JSON array) is split into **one `Claim` of type `"scope"` per value**, so `RequireClaim("scope", "read:weather")` matches directly. As of 0.1.4 the local-JWT path also splits a space-delimited `scope` into one `"scope"` claim per value, matching the introspection path — so `RequireClaim("scope", "read:weather")` matches directly on both paths.
 
 **Fix:** For opaque tokens, the direct claim policy works:
 
@@ -125,15 +141,6 @@ public IActionResult Get() => Ok();
 
 // or minimal API:
 app.MapGet("/weather", () => "…").RequireAuthorization("read:weather");
-```
-
-For **space-delimited JWT scopes**, use a `RequireAssertion` policy that splits the single claim yourself:
-
-```csharp
-options.AddPolicy("read:weather", p => p.RequireAssertion(ctx =>
-    ctx.User.FindAll("scope")
-       .SelectMany(c => c.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-       .Contains("read:weather")));
 ```
 
 ## Group policy `[Authorize]` never matches
@@ -252,7 +259,7 @@ options.CacheKeyPrefix = "api-a:";
 options.CacheKeyGenerator = (opts, token) => $"{opts.CacheKeyPrefix}{opts.SchemeName}:{Hash(token)}";
 ```
 
-Note the **in-flight de-dupe** dictionary (which collapses concurrent introspections of the same token) is keyed by the raw token only, with no scheme discriminator — this is intentional and documented; it is a concurrency collapse, not a result cache, so it never leaks claims across schemes.
+Note the **in-flight de-dupe** dictionary (which collapses concurrent introspections of the same token) is keyed by **scheme name + token** (as of 0.1.4); it is a concurrency collapse, not a result cache, and concurrent introspections of the same token under different schemes no longer share a result.
 
 ## Signing-key rotation causes transient JWT failures
 
@@ -290,7 +297,7 @@ Use `MonoCloud.Management` only to *call* the admin API (create users, list clie
 
 ## `NETSDK` / target-framework error — package won't restore
 
-**Symptom:** `error NU1202: Package MonoCloud.Authentication.Api 0.1.3 is not compatible with …`, or restore fails on an older project.
+**Symptom:** `error NU1202: Package MonoCloud.Authentication.Api 0.1.4 is not compatible with …`, or restore fails on an older project.
 
 **Cause:** The package targets **net8.0, net9.0 and net10.0** (the `net6.0`/`net7.0` targets were dropped in 0.1.3). A project on `net6.0`, `net7.0`, `netstandard2.0`, `netcoreapp3.1`, `net5.0`, or `net framework` cannot consume it.
 

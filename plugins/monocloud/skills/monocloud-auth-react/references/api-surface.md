@@ -243,7 +243,14 @@ State machine: `processing → done | error`. The component runs `processCallbac
 All errors re-exported from `@monocloud/auth-web-js`:
 
 ```ts
-class MonoCloudAuthBaseError extends Error {}
+class MonoCloudAuthBaseError extends Error {
+  raw?: {                               // only present on errors raised from an unsuccessful HTTP response
+    status: number;
+    statusText: string;
+    headers: Record<string, string>;   // repeated headers comma-joined; set-cookie excluded
+    body: string;                       // unparsed response body
+  };
+}
 
 class MonoCloudOPError extends MonoCloudAuthBaseError {
   error: string;                                // OAuth error code (e.g. 'login_required')
@@ -251,12 +258,17 @@ class MonoCloudOPError extends MonoCloudAuthBaseError {
 }
 
 class MonoCloudValidationError extends MonoCloudAuthBaseError {}
-class MonoCloudTokenError      extends MonoCloudAuthBaseError {}
-class MonoCloudHttpError       extends MonoCloudAuthBaseError {}
+class MonoCloudTokenError extends MonoCloudAuthBaseError {
+  code: 'invalid_token' | 'insufficient_scope' | 'insufficient_groups';  // default 'invalid_token'
+}
+class MonoCloudHttpError extends MonoCloudAuthBaseError {
+  get status(): number | undefined;       // from raw.status; undefined on network failure
+  get statusText(): string | undefined;
+}
 class MonoCloudJsError         extends MonoCloudAuthBaseError {}
 ```
 
-No status-code field. Branch with `instanceof`; for `MonoCloudOPError`, also branch on `.error` (`login_required`, `interaction_required`, `access_denied`, `invalid_grant`, etc.).
+Branch with `instanceof`. `MonoCloudHttpError` exposes `.status` / `.statusText`, `MonoCloudTokenError` a `.code` discriminator, and every error a `.raw` (`{ status, statusText, headers, body }`) when it was derived from an unsuccessful HTTP response. For `MonoCloudOPError`, also branch on `.error` (`login_required`, `interaction_required`, `access_denied`, `invalid_grant`, etc.).
 
 This package itself throws `MonoCloudJsError` in two specific cases:
 

@@ -297,7 +297,7 @@ export const client = new MonoCloudWebJSClient({
 
 ## Errors
 
-All errors extend `MonoCloudAuthBaseError` (which extends `Error`). Use `instanceof` to branch; there is no `statusCode` field.
+All errors extend `MonoCloudAuthBaseError` (which extends `Error`). Use `instanceof` to branch. Errors raised from an unsuccessful HTTP response also carry a `raw` (`{ status, statusText, headers, body }`), and `MonoCloudHttpError` exposes `status` / `statusText` getters.
 
 | Class                       | Thrown for                                                                     |
 | --------------------------- | ------------------------------------------------------------------------------ |

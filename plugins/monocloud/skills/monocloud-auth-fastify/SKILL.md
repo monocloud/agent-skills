@@ -144,9 +144,11 @@ interface MonoCloudBackendNodeClientOptions {
 
 ## Default responses
 
-- No `Authorization: Bearer <token>` header (and no custom `tokenResolver`): `401 { "message": "unauthorized" }`
-- Token validation fails (signature, audience, issuer, expiry, mismatched cnf, etc.): `401 { "message": "unauthorized" }`
-- Token valid but missing required scopes or groups: `403 { "message": "forbidden" }`
+- No `Authorization: Bearer <token>` header (and no custom `tokenResolver`): `401 { "message": "unauthorized" }` with a `WWW-Authenticate: Bearer` challenge header.
+- Token validation fails (signature, audience, issuer, expiry, mismatched cnf, etc.): `401 { "message": "unauthorized" }` with `WWW-Authenticate: Bearer error="invalid_token"`.
+- Token valid but missing required scopes or groups: `403 { "message": "forbidden" }` with `WWW-Authenticate: Bearer error="insufficient_scope"`.
+- Authorization-server outage (network failure, or a 5xx/429 from the introspection/JWKS endpoint): `503 { "message": "service unavailable" }`.
+- Configuration/OP failure (missing introspection credentials, an OP OAuth error, or a 4xx introspection response): `500 { "message": "internal server error" }`.
 
 The hook calls `reply.status(...).send(...)` directly on failure — `done()` is not invoked. Customise responses by wrapping the hook or by calling `MonoCloudBackendNodeClient.validateAccessToken()` from your own `onRequest`.
 
@@ -239,14 +241,14 @@ interface IIntrospectionCache {
 }
 ```
 
-Caching is keyed on the raw token string. The exact validity check is `cached.exp > now() + clockSkew - clockTolerance`, i.e. a cached entry stays valid until `claims.exp + clockTolerance - clockSkew < now()`. With the defaults (`clockSkew: 0`, `clockTolerance: 60`) the cache will keep returning a claim for up to ~60 seconds **past** the token's `exp`. Lower `clockTolerance` (e.g. to `0`) for strict expiry; raise it for higher hit rates at the cost of accepting slightly-expired tokens.
+Caching is keyed on the raw token string. The exact validity check is `cached.exp > now() + clockSkew - clockTolerance`, i.e. a cached entry stays valid until `claims.exp + clockTolerance - clockSkew < now()`. With the defaults (`clockSkew: 0`, `clockTolerance: 60`) the cache will keep returning a claim for up to ~60 seconds **past** the token's `exp`. Lower `clockTolerance` (e.g. to `0`) for strict expiry; raise it for higher hit rates at the cost of accepting slightly-expired tokens. A cache hit is **not** a shortcut past authorization: the cached claims are still re-checked against the requested `scopes`/`groups` and (when enabled) certificate binding on every request, so a cached token that lacks a route's scope is still rejected.
 
 ## JWT vs. introspection — how the SDK decides
 
 - Three dot-separated parts (`xxx.yyy.zzz`) **and** `introspectJwtTokens` is false (default): the SDK validates the JWT locally using JWKS fetched from the tenant. After JWKS warms, no network call per request.
 - Otherwise (opaque tokens, or `introspectJwtTokens=true`): the SDK calls the OIDC introspection endpoint. Requires `clientId` + `clientSecret` (or another `clientAuthMethod`).
 
-**JWT tokens don't require client credentials.** Opaque tokens do. `MonoCloudValidationError: The clientId option must be configured to introspect access tokens` on an opaque-token request means you need to add the introspection env vars.
+**JWT tokens don't require client credentials.** Opaque tokens do. `MonoCloudValidationError: Token introspection is not configured` on an opaque-token request (or any token when `introspectJwtTokens` is `true`) means no introspection credentials are configured — the SDK now fails immediately, and the hook returns 500. Add the introspection env vars (`MONOCLOUD_BACKEND_CLIENT_ID` + `_CLIENT_SECRET`).
 
 ## Common pitfalls
 
@@ -274,7 +276,7 @@ Re-exported from `@monocloud/auth-core` via `@monocloud/backend-node`:
 - `AccessTokenClaims`, `JwtClaims`, `Jwk`, `Jwks`, `IssuerMetadata`, `ClientAuthMethod`
 - `MonoCloudAuthBaseError`, `MonoCloudValidationError`, `MonoCloudOPError`, `MonoCloudHttpError`, `MonoCloudTokenError`
 
-A failed scope/group check throws `MonoCloudTokenError` with the message `'Token is missing required scopes'` or `'Token is missing required groups'` — the hook converts these to 403. Other validation failures throw `MonoCloudTokenError` / `MonoCloudValidationError` and become 401.
+A failed scope/group check throws `MonoCloudTokenError` with `code` `'insufficient_scope'` or `'insufficient_groups'` (messages `'Token is missing required scopes'` / `'Token is missing required groups'`) — the hook maps these to 403 by the `code`, not by the message string. Any other `MonoCloudTokenError` (`code: 'invalid_token'`) becomes 401. `MonoCloudValidationError`, `MonoCloudOPError`, and a 4xx `MonoCloudHttpError` become 500; a network failure / 5xx / 429 (`MonoCloudHttpError`) becomes 503.
 
 ## Deeper reference
 

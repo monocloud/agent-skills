@@ -1,6 +1,6 @@
 # `MonoCloud.Authentication.Api` — API surface
 
-Exhaustive type-by-type surface for the `MonoCloud.Authentication.Api` NuGet package — the MonoCloud **ASP.NET Core authentication handler** for validating access tokens on APIs / resource servers. Verified against `MonoCloud.Authentication.Api/` (source) and `README.nuget.md` on **`MonoCloud.Authentication.Api@0.1.3`** (repo `monocloud/api-authentication-dotnet`, tag `v0.1.3`, clean tree). Signatures are listed **verbatim** from source, including default parameter values. IDE intellisense (go-to-definition) is the source of truth for members not listed here.
+Exhaustive type-by-type surface for the `MonoCloud.Authentication.Api` NuGet package — the MonoCloud **ASP.NET Core authentication handler** for validating access tokens on APIs / resource servers. Verified against `MonoCloud.Authentication.Api/` (source) and `README.nuget.md` on **`MonoCloud.Authentication.Api@0.1.4`** (repo `monocloud/api-authentication-dotnet`, tag `v0.1.4`, clean tree). Signatures are listed **verbatim** from source, including default parameter values. IDE intellisense (go-to-definition) is the source of truth for members not listed here.
 
 This is a standard ASP.NET Core authentication handler (built on `Microsoft.AspNetCore.Authentication.JwtBearer`) that plugs into `AddAuthentication()`, `[Authorize]`, and the authorization **policy system**. It is **not** a middleware you write, **not** a management client, and it has **no** `protectApi` factory (that is the Node express/fastify SDK — a different skill). See [What this SDK does NOT have](#what-this-sdk-does-not-have).
 
@@ -267,7 +267,7 @@ Derives from `JwtBearerEvents`, so the **standard bearer events are inherited** 
 |---|---|---|
 | `OnMessageReceived` / `MessageReceived` | First in `HandleAuthenticateAsync`, before the token is read from the `Authorization` header. Set `context.Token`/`context.Result`. | `MessageReceivedContext` (JwtBearer) |
 | `OnTokenValidated` / `TokenValidated` | After the `ClaimsPrincipal` is built, on **both** paths. Set `context.Result` to override. | `TokenValidatedContext` (JwtBearer) — `context.SecurityToken` is the parsed JWT on the JWT path, **`null` on the opaque path** |
-| `OnAuthenticationFailed` / `AuthenticationFailed` | On any failure (JWT validation error, introspection failure, inactive token, cert-binding failure). `context.Exception` carries the error; set `context.Result` to override the default `AuthenticateResult.Fail`. | `AuthenticationFailedContext` (JwtBearer) |
+| `OnAuthenticationFailed` / `AuthenticationFailed` | On any failure — JWT validation error, introspection infrastructure failure, inactive token, cert-binding failure. `context.Exception` carries the error. As of 0.1.4 token verdicts (`active:false`, cert-binding) yield a **401**; introspection infrastructure failures (and exceptions from opaque-path handlers) **rethrow → HTTP 500** unless `context.Result` is set. | `AuthenticationFailedContext` (JwtBearer) |
 | `OnChallenge` / `Challenge` | Before the 401 `WWW-Authenticate` challenge is written. | `JwtBearerChallengeContext` (JwtBearer) |
 | `OnForbidden` / `Forbidden` | On a 403. | `ForbiddenContext` (JwtBearer) |
 | `OnCertificateBindingValidated` / `CertificateBindingValidated` | After the presented cert's SHA-256 thumbprint matches the token's `cnf.x5t#S256`. If `context.Result` is set it is returned. | `CertificateBindingValidatedContext` (MonoCloud) — none |
@@ -337,7 +337,7 @@ builder.Services.AddSingleton<IIntrospectionCache, RedisIntrospectionCache>();
 
 **TTL / key.** Key = `CacheKeyPrefix + Base64(SHA256("{SchemeName}|{token}"))`. TTL starts at `CacheDuration`; if a parseable `exp` claim is present, entries already expired are not cached and the TTL is shortened to the remaining token life when the token expires sooner than `now + CacheDuration`. A missing/non-numeric `exp` never throws — it just caches for `CacheDuration`.
 
-**Read-path resilience.** A thrown exception from `GetAsync` is caught and logged, then the handler falls through to a live introspection — a cache failure never fails the request. Separately, a static in-process `ConcurrentDictionary<string, Lazy<Task<…>>>` de-duplicates concurrent in-flight introspections of the same token (removed in a `finally`); it collapses duplicate calls but is **not** a result cache and is keyed by the raw token only (no scheme discriminator).
+**Cache resilience.** A thrown exception from `GetAsync` is caught and logged, then the handler falls through to a live introspection; a failing `SetAsync` write is likewise caught and logged (as of 0.1.4) — a cache failure never fails an otherwise-successful request. Separately, a static in-process `ConcurrentDictionary<string, Lazy<Task<…>>>` de-duplicates concurrent in-flight introspections of the same token (removed in a `finally`); it collapses duplicate calls but is **not** a result cache, and is keyed by **scheme name + token** (as of 0.1.4) so concurrent introspections of the same token under different schemes don't share a result.
 
 Minimal in-memory example:
 
@@ -378,7 +378,6 @@ public class JwtAssertion
 {
     public string    Assertion           { get; set; } = string.Empty;   // the signed JWT
     public string    AssertionType       { get; set; } = string.Empty;   // e.g. urn:ietf:params:oauth:client-assertion-type:jwt-bearer
-    public DateTime? AssertionCacheExpiry { get; set; }
 }
 ```
 
@@ -404,7 +403,7 @@ Returned/overridden via the [`CreatingJwtAssertion`](#monocloudauthenticationeve
 
 There is **no MonoCloud-specific authorization API** — authorization is pure ASP.NET Core. The handler only authenticates and turns token data into claims; you enforce scope/group requirements with the standard policy system.
 
-**How scopes land as claims.** On the opaque/introspection path, the `scope` value (space-delimited string **or** JSON array) is split into **one `"scope"` claim per value**. On the JWT path, scope claims arrive exactly as the JWT emits them — typically a **single** `scope` claim holding a space-delimited string (it is not auto-split).
+**How scopes land as claims.** On the opaque/introspection path, the `scope` value (space-delimited string **or** JSON array) is split into **one `"scope"` claim per value**. On the JWT path, a space-delimited `scope` is split the same way (aligned in 0.1.4), so `RequireClaim("scope", …)` matches per-value on both the JWT and introspection paths.
 
 **How groups land as claims.** Groups arrive under whatever claim the token uses (MonoCloud uses `groups`). To have array-valued groups expanded into individual claims, set `options.RoleClaimType = "groups"`. Group normalization then runs — on the opaque path **only when `RoleClaimType` is non-null**; on the JWT path always. It expands a JSON-array group claim into one claim per element: a string array becomes one claim per string; an array of `{ id, name }` objects becomes **two** claims per group (one for `id`, one for `name`) — so a `RequireClaim` policy can match either the group id or the group name. Because `RoleClaimType` is the identity's role claim type, `[Authorize(Roles = ...)]` / `User.IsInRole(...)` also work against groups.
 
@@ -460,7 +459,7 @@ public class WeatherController : ControllerBase
 }
 ```
 
-> **Scope-splitting caveat.** On the JWT path a space-delimited `scope` stays a single claim, so `RequireClaim("scope", "read:weather")` won't match a multi-scope JWT `scope`. Use a custom policy/requirement (or `IntrospectJwtTokens = true`) when you need per-scope checks on JWTs; the introspection path already splits scopes into discrete `"scope"` claims, so `RequireClaim("scope", "…")` works directly there.
+> **Scope splitting.** A space-delimited `scope` is split into discrete `"scope"` claims on **both** the JWT and introspection paths (aligned in 0.1.4), so `RequireClaim("scope", "read:weather")` works directly on either — no custom requirement needed.
 
 ## Defaults
 
@@ -493,7 +492,7 @@ public class WeatherController : ControllerBase
 - **`MapInboundClaims` defaults to `true`** — `sub`/`name`/etc. become long WS-* URIs on the JWT path (introspection claims are not remapped). Set `false`, or point `NameClaimType`/`RoleClaimType` at the mapped URIs, if you index claims by short name.
 - **Group expansion only happens if `RoleClaimType` is set** (the opaque path gates normalization on `RoleClaimType != null`). Forget `options.RoleClaimType = "groups"` and the `groups` claim stays a raw JSON-array string — `RequireClaim("groups", "admin")` won't match.
 - **`{ id, name }` group objects expand into TWO claims** (one id, one name), both of the role/group claim type — a policy can match either.
-- **Introspection scopes are split per-value; JWT scopes are not** — scope policies behave differently between the two paths.
+- **Scopes are split per-value on both paths** (aligned in 0.1.4) — `RequireClaim("scope", …)` behaves identically on the JWT and introspection paths.
 - **Provide the tenant root, not the discovery URL.** `Authority` is auto-prefixed with `https://`; discovery is `Authority + "/.well-known/openid-configuration"`.
 - **`Audience` only feeds `ValidAudience` if it is empty** — setting `TokenValidationParameters.ValidAudience`/`ValidAudiences` directly overrides `Audience`.
 - **`TlsAuth`/`SpiffeX509Auth` require the discovery doc to expose `mtls_endpoint_aliases.introspection_endpoint`** (or a trust-store-specific `mtls_additional_endpoint_aliases` entry); otherwise `InvalidOperationException`. A `TlsAuth` with an explicit `Certificate` makes post-configure build a dedicated `HttpClient`; without one, attach the cert to `options.HttpClient`'s handler yourself.
