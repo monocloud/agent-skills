@@ -1,7 +1,7 @@
 {
   "name": "monocloud",
   "displayName": "MonoCloud",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "MonoCloud SDK agent skills. Detects your stack and routes to the right MonoCloud integration: @monocloud/auth-nextjs, @monocloud/auth-react, @monocloud/auth-web-js, @monocloud/backend-node (Express/Fastify), MonoCloud.Authentication.Api (ASP.NET Core), @monocloud/management, or MonoCloud.Management (.NET).",
   "author": {
     "name": "MonoCloud",
