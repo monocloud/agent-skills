@@ -2,7 +2,7 @@
 
 Quick reference for the most common issues validating MonoCloud-issued access tokens in a Fastify API. Most issues fall into **audience mismatch**, **token-format/introspection mis-config**, or **scope/group enforcement quirks** — the same engine as the Express adapter.
 
-## 401 `invalid_audience`
+## 401 on audience mismatch (`invalid_token`)
 
 **Symptom:** Every request returns `401 { "message": "unauthorized" }` (with `WWW-Authenticate: Bearer error="invalid_token"`). The response body carries no `error_description` — decode the token to confirm it is the audience.
 
@@ -103,7 +103,7 @@ fastify.addHook("onRequest", protect());
 
 **Symptom:** Slow first request, JWKS fetched repeatedly, occasional 5xx.
 
-**Cause:** Building the factory inside a handler. `protectApi()` triggers OIDC discovery + JWKS fetch — do it once.
+**Cause:** Building the factory inside a handler. `protectApi()` constructs a fresh `MonoCloudBackendNodeClient` on every call, and the discovery-metadata / JWKS caches live on the client instance — so each new client re-fetches the discovery document and JWKS on the first request it validates. Build it once.
 
 **Fix:** Build at module scope or in your bootstrap function and reuse:
 
@@ -115,7 +115,7 @@ fastify.get('/b', { onRequest: protect({ scopes: ['x'] }) }, ...);
 
 ## mTLS certificate-binding errors
 
-**Symptom:** Tokens that work in other clients fail with `mtls_binding_mismatch`.
+**Symptom:** Tokens that work in other clients fail with `401 { "message": "unauthorized" }` (`WWW-Authenticate: Bearer error="invalid_token"`). The underlying `MonoCloudTokenError` message is `The certificate hash in the access token does not match the presented client certificate (certificate binding validation failed)` — or `Client certificate is not present` when `validateCertificateBinding: true` is set but no `certificateResolver` is wired. There is no `mtls_binding_mismatch` code; every binding failure is a plain `MonoCloudTokenError` with `code: 'invalid_token'`.
 
 **Cause:** The token was issued with a `cnf` confirmation claim binding it to a specific client certificate. The cert presented to this API doesn't match.
 
@@ -133,6 +133,14 @@ fastify.get('/b', { onRequest: protect({ scopes: ['x'] }) }, ...);
 MONOCLOUD_BACKEND_GROUPS_MATCH_ALL=true
 MONOCLOUD_BACKEND_INTROSPECT_JWT_TOKENS=true
 ```
+
+## `MonoCloudValidationError` thrown at startup
+
+**Symptom:** The process dies as soon as `protectApi()` (or `new MonoCloudBackendNodeClient()`) runs, with a `MonoCloudValidationError` such as `"tenantDomain" is required`, `"audience" is required`, or `"audience" must be a valid uri` — no request is ever served.
+
+**Cause:** `protectApi()` constructs the client eagerly and options are validated immediately. `tenantDomain` and `audience` are both **required** and must be absolute URIs; a missing or non-URL value throws instead of degrading to a per-request 500.
+
+**Fix:** Ensure `MONOCLOUD_BACKEND_TENANT_DOMAIN` and `MONOCLOUD_BACKEND_AUDIENCE` are full URLs (`https://acme.us.monocloud.com`, `https://api.example.com`) and are already in `process.env` **before** the module that calls `protectApi()` is imported — load the env file first (`node --env-file=.env`, `import 'dotenv/config'`, etc.).
 
 ## Tenant domain trailing slash
 

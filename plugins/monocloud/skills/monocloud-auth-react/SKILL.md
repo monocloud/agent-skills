@@ -95,7 +95,7 @@ By default the provider mounts, the SDK runs `processCallback()` once, and the a
 | `<SignOut>`                     | Component   | Renders a `<button>` that calls `signOut()`.                                                 |
 | `<Protected>`                   | Component   | Client-side conditional render based on auth + optional group membership.                    |
 | `<ProcessCallback>`             | Component   | For dedicated callback routes. Use with `autoProcessCallback={false}` on the provider.       |
-| Re-exported from `auth-web-js`  | —           | `MonoCloudWebJSClient`, `LocalStorage`, `MemoryStorage`, `SessionStorage`, all errors, all types. |
+| Re-exported from `auth-web-js`  | —           | `MonoCloudWebJSClient`, `LocalStorage`, `MemoryStorage`, `SessionStorage`, all 6 error classes, and the client/session/option types listed in `references/api-surface.md`. **Not** re-exported: `MonoCloudOidcClient` and the lower-level protocol types (`Jwks`, `IssuerMetadata`, `Tokens`, `CallbackParams`, `EndSessionParameters`, …) — import those from `@monocloud/auth-web-js`. |
 
 Everything in `@monocloud/auth-react` is client-only (every file starts with `'use client';`). Don't import from this package in a Server Component / RSC.
 
@@ -426,7 +426,7 @@ useEffect(() => {
 5. **Forgetting `offline_access`.** Refresh tokens are only issued when `offline_access` is granted. Without it `refreshSession()` and the auto-refresh in `getTokens()` throw `MonoCloudValidationError`. Add it to `defaultAuthParams.scopes` (or pass via `<SignIn scopes="…">`).
 6. **`signIn({ mode: 'popup' })` from `useEffect`.** Browsers block popups not opened from a user gesture. Call inside a click handler — the `<SignIn>` component already does this correctly; if you call `signIn` yourself, do it from `onClick`, not `useEffect`.
 7. **Mismatched dashboard URLs.** `appUrl + callbackPath` (and `appUrl + signOutPath`) must exactly match the dashboard entries — including scheme, host, port, path. Same for the CORS origin.
-8. **`MemoryStorage` + default `postCallback`.** The default `postCallback` does a full page reload, which empties memory and drops the just-created session. Either keep the default `LocalStorage`/`SessionStorage` or pass a `postCallback` that navigates with your router (no reload).
+8. **`MemoryStorage` + default `postCallback` + a `returnUrl`.** When a `returnUrl` was set, the default `postCallback` does `window.location.href = returnUrl` — a full page reload that empties memory and drops the just-created session (with no `returnUrl` it only strips the callback query params via `history.replaceState`, which is safe). Either keep the default `LocalStorage`/`SessionStorage` or pass a `postCallback` that navigates with your router (no reload).
 9. **Wrapping the provider above `<BrowserRouter>` when `postCallback` uses `useNavigate`.** `useNavigate` only works inside `<BrowserRouter>`. Put the provider **inside** the router subtree.
 10. **Shipping a `clientSecret` prop.** SPAs are public clients. Don't pass `clientSecret` — the bundle is public and the secret leaks.
 11. **Calling `client.signOut()` from `useClient()` and expecting `isAuthenticated` to flip.** The raw client does not re-sync the context — use the hook's `signOut`, or call any other `useAuth` action afterwards to re-sync.

@@ -60,6 +60,26 @@ button.addEventListener('click', async () => {
 
 If you can't avoid pre-popup async work, switch to `mode: 'redirect'` instead.
 
+## Popup / silent window never returns a callback
+
+**Symptom:** `signIn({ mode: 'popup' })` (or `signOut({ mode: 'popup' })`) rejects with `MonoCloudJsError: Window closed by user`, or — after a long wait — `MonoCloudJsError: Authentication window timed out`.
+
+**Cause:** The SDK polls the popup every 100 ms and rejects as soon as it is closed before posting its callback; a separate timer rejects once the window outlives `authWindowTimeout` (default `600` seconds). `signInSilent()` uses the same machinery, so a hidden iframe that never reaches the callback URL times out with the identical error.
+
+**Fix:** Treat both as user/environment conditions rather than bugs — catch `MonoCloudJsError` and re-offer the sign-in button. Lower `authWindowTimeout` if 10 minutes of a stuck popup is too long for your UX.
+
+```ts
+try {
+  await client.signIn({ mode: 'popup' });
+} catch (e) {
+  if (e instanceof MonoCloudJsError) {
+    // window closed, blocked, or timed out — show the sign-in button again
+  } else {
+    throw e;
+  }
+}
+```
+
 ## Silent sign-in always rejects with `login_required`
 
 **Symptom:** `signInSilent()` throws `MonoCloudOPError` with `error: 'login_required'`, even when the user is signed in elsewhere with the same tenant.
@@ -111,7 +131,7 @@ The same restriction applies to `signOut()` when `federatedSignOut` is `true`.
 
 ## `MonoCloudValidationError: Refresh token not found`
 
-**Symptom:** `refreshSession()` or the auto-refresh inside `getTokens()` throws `MonoCloudValidationError: Refresh token not found. Sign in with offline_access scope to get the refresh token.`
+**Symptom:** `refreshSession()` throws `MonoCloudValidationError: Refresh token not found. Sign in with offline_access scope to get the refresh token.` The auto-refresh inside `getTokens()` has no pre-check of its own, so it surfaces the core client's message instead: `MonoCloudValidationError: Session does not contain refresh token`. Same cause, two different strings.
 
 **Cause:** The authorization server only issues a refresh token when `offline_access` is in the granted scopes. Missing it is the most common cause.
 

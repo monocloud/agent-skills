@@ -53,8 +53,8 @@ Optional tuning:
 | `MONOCLOUD_BACKEND_CLOCK_TOLERANCE`         | `60`    | Extra tolerance on time-based claims (seconds)             |
 | `MONOCLOUD_BACKEND_GROUPS_CLAIM`            | `groups` | Claim name that carries group memberships                  |
 | `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL`        | `false` | If `true`, all listed groups must match                    |
-| `MONOCLOUD_BACKEND_JWKS_CACHE_DURATION`     | —       | Seconds to cache the JWKS                                  |
-| `MONOCLOUD_BACKEND_METADATA_CACHE_DURATION` | —       | Seconds to cache the OIDC discovery doc                    |
+| `MONOCLOUD_BACKEND_JWKS_CACHE_DURATION`     | `300`   | Seconds to cache the JWKS                                  |
+| `MONOCLOUD_BACKEND_METADATA_CACHE_DURATION` | `300`   | Seconds to cache the OIDC discovery doc                    |
 
 ## Basic wiring
 
@@ -149,6 +149,7 @@ interface MonoCloudBackendNodeClientOptions {
 - Token valid but missing required scopes or groups: `403 { "message": "forbidden" }` with `WWW-Authenticate: Bearer error="insufficient_scope"`.
 - Authorization-server outage (network failure, or a 5xx/429 from the introspection/JWKS endpoint): `503 { "message": "service unavailable" }`.
 - Configuration/OP failure (missing introspection credentials, an OP OAuth error, or a 4xx introspection response): `500 { "message": "internal server error" }`.
+- Any other thrown error (a custom `tokenResolver` / `certificateResolver` that throws, a failing `IIntrospectionCache` implementation, etc.): `401 { "message": "unauthorized" }` with `WWW-Authenticate: Bearer error="invalid_token"` — the error mapper falls through to the unauthorized response for unrecognised errors.
 
 The hook calls `reply.status(...).send(...)` directly on failure — `done()` is not invoked. Customise responses by wrapping the hook or by calling `MonoCloudBackendNodeClient.validateAccessToken()` from your own `onRequest`.
 

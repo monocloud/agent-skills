@@ -15,11 +15,12 @@ Browser-side authentication SDK for single-page applications and any vanilla Jav
 This is **not** the same as:
 
 - `@monocloud/auth-nextjs` — server-side session auth for Next.js (skill: `monocloud-auth-nextjs`).
+- `@monocloud/auth-react` — React wrapper around this SDK: `<MonoCloudAuthProvider>`, `useAuth()`, `useClient()`, `<SignIn>` / `<Protected>` / `<ProcessCallback>` (skill: `monocloud-auth-react`). Use that one for React SPAs.
 - `@monocloud/backend-node` — API token validation on Express / Fastify (skills: `monocloud-auth-express`, `monocloud-auth-fastify`).
 - `@monocloud/management` — server-only Management API client (skill: `monocloud-management-js`).
 - `@monocloud/auth-core` — internal core used by this SDK. App code should import from `@monocloud/auth-web-js`; types and error classes (`MonoCloudOPError`, `MonoCloudValidationError`, etc.) are re-exported from the public package.
 
-Use this SDK when you are building a browser app **without** a server-rendered framework — pure HTML/JS, Vite, Parcel, webpack-bundled SPA, or a custom framework integration on top of MonoCloud. If your project ships with Next.js, prefer `@monocloud/auth-nextjs` instead — it gives you cookie-based sessions and server-side helpers that this SDK does not.
+Use this SDK when you are building a browser app **without** a server-rendered framework — pure HTML/JS, Vite, Parcel, webpack-bundled SPA, or a custom framework integration on top of MonoCloud. If your project ships with Next.js, prefer `@monocloud/auth-nextjs` instead — it gives you cookie-based sessions and server-side helpers that this SDK does not. If it is a React SPA (Vite / CRA / custom React with no server framework), prefer `@monocloud/auth-react` — it wraps this exact client with a provider, hooks, and components.
 
 ## Installation
 
@@ -326,7 +327,7 @@ try {
 
 ## Multiple clients in the same app
 
-Each `MonoCloudWebJSClient` keys its persisted state by `clientId`. If you have **two clients with the same `clientId`** (rare — e.g. switching audiences/tenants from one app), pass a unique `sessionKey` so they don't trample each other's session in storage:
+Each `MonoCloudWebJSClient` keys its persisted state by `clientId`. If you have **two clients with the same `clientId`** (rare — e.g. switching audiences/tenants from one app), pass a unique `sessionKey` so they don't trample each other's session in storage. Note `sessionKey` namespaces the **session** and **lock** keys only — the in-flight callback state always lives at `mc.state.<clientId>`, so never have two same-`clientId` instances with a redirect flow pending at the same time:
 
 ```ts
 const adminClient = new MonoCloudWebJSClient({ /* ... */ clientId: 'app', sessionKey: 'admin' });

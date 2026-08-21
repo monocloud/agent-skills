@@ -24,7 +24,7 @@ The surface most apps actually reach for — full signatures and types follow be
 | Export | Signature (summary) |
 |---|---|
 | `authMiddleware` | `(options?) => NextMiddleware \| NextProxy` — also callable as `(req, evt) => Promise<NextMiddlewareResult>` for composition |
-| `monoCloudAuth` | `(options?) => MonoCloudAuthHandler` — catch-all route handler factory; use only when you can't use `authMiddleware()` |
+| `monoCloudAuth` | `(options?) => MonoCloudAuthHandler` — catch-all route handler factory; use only when you can't use `authMiddleware()`. In the App Router export it for `POST` as well as `GET` (back-channel logout and the `form_post` response mode arrive as `POST`) |
 | `getSession` | `() / (req) / (req, res) / (req, res, options)` → `Promise<MonoCloudSession \| undefined>` |
 | `getTokens` | Same overload shape as `getSession` → `Promise<MonoCloudTokens>`; throws `MonoCloudValidationError` if no session |
 | `isAuthenticated` | `() / (req, res?)` → `Promise<boolean>` |
@@ -34,6 +34,8 @@ The surface most apps actually reach for — full signatures and types follow be
 | `protectPage` | `(component, options?)` (App Router) **or** `(options?)` (Pages Router — returns `getServerSideProps`) |
 | `redirectToSignIn` | `(options?) => Promise<void>` — App Router only |
 | `redirectToSignOut` | `(options?) => Promise<void>` — App Router only |
+
+`MonoCloudAuthOptions` (for `monoCloudAuth`) and `MonoCloudMiddlewareOptions.onError` (for `authMiddleware`) both fire for failures in the sign-in, callback, sign-out, userinfo **and** back-channel logout endpoints. In the App Router the handler must return a `NextResponse` or throw; in the Pages Router it must send a response — otherwise the request hangs.
 
 ### Class
 
@@ -122,7 +124,7 @@ interface MonoCloudOptions {
 
 interface MonoCloudRoutes {
   callback: string;          // default '/api/auth/callback'
-  backChannelLogout: string; // default '/api/auth/backchannel-logout'
+  backChannelLogout: string; // default '/api/auth/backchannel-logout'; POST only, 404 unless onBackChannelLogout is set
   signIn: string;            // default '/api/auth/signin'
   signOut: string;           // default '/api/auth/signout'
   userInfo: string;          // default '/api/auth/userinfo'
@@ -381,7 +383,7 @@ interface ProtectedComponentProps {
 | Callback | `/api/auth/callback` | `MONOCLOUD_AUTH_CALLBACK_URL` | `NEXT_PUBLIC_MONOCLOUD_AUTH_CALLBACK_URL` |
 | Userinfo | `/api/auth/userinfo` | `MONOCLOUD_AUTH_USER_INFO_URL` | `NEXT_PUBLIC_MONOCLOUD_AUTH_USER_INFO_URL` |
 | Sign-out | `/api/auth/signout` | `MONOCLOUD_AUTH_SIGNOUT_URL` | `NEXT_PUBLIC_MONOCLOUD_AUTH_SIGNOUT_URL` |
-| Back-channel logout | `/api/auth/backchannel-logout` | `MONOCLOUD_AUTH_BACK_CHANNEL_LOGOUT_URL` | n/a |
+| Back-channel logout | `/api/auth/backchannel-logout` | `MONOCLOUD_AUTH_BACK_CHANNEL_LOGOUT_URL` | n/a — `POST` only; `404` until `onBackChannelLogout` is set on the client instance |
 
 Any `NEXT_PUBLIC_MONOCLOUD_AUTH_*` variable is also copied into its private counterpart at client init, so you only need to set the `NEXT_PUBLIC_` form when you want both the server middleware and the client helpers to agree on a custom path.
 

@@ -394,6 +394,8 @@ Fires every time the SDK is about to persist a new or updated session — after 
 class MonoCloudAuthBaseError extends Error {
   // Present only on errors derived from an unsuccessful HTTP response.
   // Shape: { status, statusText, headers (repeated headers comma-joined, set-cookie excluded), body (unparsed) }.
+  // NOTE: `MonoCloudRawResponse` and `MonoCloudTokenErrorCode` are NOT re-exported by this package —
+  // inline the shapes/union shown here instead of importing them from '@monocloud/auth-web-js'.
   readonly raw?: MonoCloudRawResponse;
 }
 

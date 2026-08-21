@@ -18,7 +18,7 @@ The surface most apps actually reach for — full signatures and types follow be
 import { ... } from '@monocloud/backend-node/express';
 ```
 
-The root `@monocloud/backend-node` exports the same shared types and the client class, but **not** `protectApi` (that lives in the framework subpaths).
+The root `@monocloud/backend-node` exports the shared types and the client class, but **not** `protectApi` (that lives in the framework subpaths). The root is also the only entry point that exports `MtlsEndpointAliases` — import that one type from `@monocloud/backend-node`, not from `/express`.
 
 The package also ships two helper subpaths that re-export from `@monocloud/auth-core`:
 
@@ -44,7 +44,7 @@ function protectApi(
 type ProtectMiddleware = (options?: ProtectOptions) => RequestHandler;
 ```
 
-Without a `client`, a new `MonoCloudBackendNodeClient` is constructed from environment variables on first call.
+Without a `client`, `protectApi()` constructs a `MonoCloudBackendNodeClient` from the `MONOCLOUD_BACKEND_*` environment variables **eagerly, at the moment `protectApi()` is called** — not lazily on the first request. Missing or invalid configuration therefore throws `MonoCloudValidationError` at startup rather than per request. (Discovery metadata and the JWKS are still fetched lazily, on the first token validation.)
 
 ## Types — framework-specific
 

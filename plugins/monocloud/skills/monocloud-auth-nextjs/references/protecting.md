@@ -15,7 +15,7 @@ Full option shapes and behavior for every protection helper in `@monocloud/auth-
 | Client Component page | `protectClientPage(Component, options?)` | Window-level redirect to sign-in URL | Render `"Access Denied"` |
 | Inline client JSX | `<Protected fallback groups>` | Render `fallback` | Render `onGroupAccessDenied(user)` |
 
-All `groups` checks honor `groupsClaim` (resolution order: per-call `groupsClaim` arg → constructor `MonoCloudOptions.groupsClaim` → env `MONOCLOUD_AUTH_GROUPS_CLAIM` → `"groups"`) and `matchAll` (defaults to `false` — user must belong to **any** listed group).
+All `groups` checks honor `groupsClaim` (resolution order: per-call `groupsClaim` arg → constructor `MonoCloudOptions.groupsClaim` → env `MONOCLOUD_AUTH_GROUPS_CLAIM` → `"groups"`). `matchAll` (default `false` — membership in **any** listed group is enough) is honored by `protect` / `protectApi` / `protectPage` / `protectClientPage` / `isUserInGroup` / `<Protected matchAllGroups>`, but **not** by `authMiddleware()`: the middleware accepts a `matchAll` option yet never forwards it to the group check, so middleware group matching is always any-of. Enforce all-of membership inside the page/route with `protect({ groups, matchAll: true })` instead.
 
 ## `authMiddleware(options?)`
 
@@ -27,7 +27,7 @@ interface MonoCloudMiddlewareOptions {
     | (string | RegExp | { routes: (string | RegExp)[]; groups: string[] })[]
     | ((req: NextRequest) => boolean | Promise<boolean>);
   groupsClaim?: string;
-  matchAll?: boolean;
+  matchAll?: boolean;              // accepted by the type, but not applied to the middleware group check
   onAccessDenied?: (req: NextRequest, evt: NextFetchEvent) =>
     | NextResponse | Response | null | undefined | void
     | Promise<NextResponse | Response | null | undefined | void>;
@@ -44,8 +44,10 @@ Behavior:
 - If `protectedRoutes` is **omitted**, every route matched by `config.matcher` requires authentication.
 - If `protectedRoutes` is `[]`, no routes are protected (but auth routes still work).
 - Matchers in the array are evaluated with `new RegExp(...)`, so plain strings act as patterns. Use `^` / `$` if you need anchoring (e.g. `'^/admin$'`).
-- Group object form (`{ routes, groups }`): the first matching entry sets the required groups for that request.
+- Group object form (`{ routes, groups }`): the first matching entry sets the required groups for that request. Matching is **any-of** — the middleware's `matchAll` option is not applied to this check.
 - For unauthenticated `/api/*` paths, the default response is `401 JSON`. For other paths, the user is redirected to sign-in with `return_url` set to the original path.
+- Auth routes (sign-in, callback, userinfo, sign-out **and** back-channel logout) are dispatched *before* `protectedRoutes` is evaluated, so they are never blocked — even with `protectedRoutes: ['.*']`.
+- `onError` also covers failures in those auth routes, including back-channel logout.
 
 ## `protectPage` — App Router
 

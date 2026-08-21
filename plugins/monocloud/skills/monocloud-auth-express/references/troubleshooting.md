@@ -66,7 +66,7 @@ Both pieces matter: `protect()` populates `claims`, and the cast tells TypeScrip
 
 **Cause:** Scope claims are space-separated in OIDC. The SDK splits them. If a custom claim name was used, the SDK won't find it.
 
-**Fix:** The standard claim is `scope` (a string) or `scp` (sometimes an array). MonoCloud uses `scope`. If you've customized claim mapping, ensure the access token still carries scopes under `scope`. Decode the token and verify.
+**Fix:** The SDK reads the token's `scope` claim **only** — a string split on whitespace. It does **not** fall back to an `scp` array claim, and there is no option to change the scope claim name (unlike groups, which have `MONOCLOUD_BACKEND_GROUPS_CLAIM`). Decode the token and confirm every required scope appears in the space-separated `scope` string; a single missing scope throws `MonoCloudTokenError('Token is missing required scopes', 'insufficient_scope')` → 403.
 
 ## Groups never match
 
@@ -95,11 +95,32 @@ app.get('/b', protect({ scopes: ['x'] }), ...);
 
 ## mTLS-bound tokens rejected
 
-**Symptom:** Tokens that work elsewhere fail here with `mtls_binding_mismatch` or `certificate_thumbprint_mismatch`.
+**Symptom:** Tokens that work elsewhere fail here with `401 { "message": "unauthorized" }` and `WWW-Authenticate: Bearer error="invalid_token"`. The underlying `MonoCloudTokenError` message is one of:
 
-**Cause:** The token was issued with `tls_client_auth` or `self_signed_tls_client_auth`. The SDK checks that the client cert presented to this API matches the `cnf` (confirmation) claim in the token. Either no cert was presented, or it's the wrong one.
+| Message | Meaning |
+| --- | --- |
+| `Client certificate is not present` | No certificate reached the validator — usually no `certificateResolver` wired, or it returned `undefined` |
+| `Client certificate is malformed` | The resolved value is not valid base64 / PEM |
+| `Access token does not contain a 'cnf' (confirmation) claim for certificate binding` | The token was not issued as certificate-bound |
+| `Malformed 'cnf' claim for certificate binding` / `The 'cnf' claim could not be parsed` | `cnf` is not a JSON object |
+| `The 'cnf' claim does not contain an 'x5t#S256' member specifying the certificate hash for binding` | `cnf` present but has no thumbprint |
+| `The certificate hash in the access token does not match the presented client certificate (certificate binding validation failed)` | Wrong certificate presented |
 
-**Fix:** Terminate TLS in front of the Node process (nginx, ALB) **with client-cert forwarding**, then pass the certificate through to Node (via a header or `req.socket.getPeerCertificate()`). The SDK reads it from the request. If you don't use mTLS, this error shouldn't occur — verify the token issuer.
+There are no `mtls_binding_mismatch` / `certificate_thumbprint_mismatch` codes — every one of the above is a plain `MonoCloudTokenError` with `code: 'invalid_token'`, so the HTTP body is always the generic `{ "message": "unauthorized" }`.
+
+**Cause:** The SDK compares the `cnf['x5t#S256']` thumbprint in the token against the SHA-256 hash of the presented client certificate. This check only runs when you pass `validateCertificateBinding: true`, and the certificate is only fetched from a `certificateResolver` you supply — **the SDK never reads the certificate off the request by itself**.
+
+**Fix:** Terminate TLS in front of the Node process (nginx, ALB) **with client-cert forwarding**, then wire a `certificateResolver` so the SDK can see it:
+
+```ts
+const protect = protectApi({
+  certificateResolver: async (req) => req.headers["x-client-cert"] as string,
+});
+
+app.get("/api/secure", protect({ validateCertificateBinding: true }), handler);
+```
+
+Without `certificateResolver`, `validateCertificateBinding: true` always fails with `Client certificate is not present`. If you don't use mTLS, don't set `validateCertificateBinding`.
 
 ## Boolean env vars silently ignored
 
@@ -114,13 +135,28 @@ MONOCLOUD_BACKEND_GROUPS_MATCH_ALL=true
 MONOCLOUD_BACKEND_INTROSPECT_JWT_TOKENS=true
 ```
 
-## Tenant domain trailing slash
+## App crashes at startup with `MonoCloudValidationError`
 
-**Symptom:** `Failed to load OIDC metadata: 404`. Or signature verification fails on otherwise valid tokens.
+**Symptom:** `protectApi()` (or `new MonoCloudBackendNodeClient()`) throws at module load, before any request arrives — e.g. `MonoCloudValidationError: "tenantDomain" is required` or `MonoCloudValidationError: "audience" must be a valid uri`.
 
-**Cause:** `MONOCLOUD_BACKEND_TENANT_DOMAIN` ends with `/` or includes `/.well-known/...`.
+**Cause:** Configuration is validated eagerly when the client is constructed. `tenantDomain` and `audience` are both **required** and both must be **absolute URIs**, so a bare identifier such as `MONOCLOUD_BACKEND_AUDIENCE=my-api` is rejected even though it is a legal OAuth audience string. Only the first validation error is included in the thrown message, so fix them one at a time. This also fires when `protectApi()` runs before your `.env` file is loaded.
 
-**Fix:** Pass the bare tenant URL: `https://acme.us.monocloud.com`. The SDK appends `/.well-known/openid-configuration` itself.
+**Fix:** Load env vars *before* the module that calls `protectApi()` (e.g. `import 'dotenv/config'` as the first import, or `node --env-file=.env`), and give both values a scheme:
+
+```
+MONOCLOUD_BACKEND_TENANT_DOMAIN=https://acme.us.monocloud.com
+MONOCLOUD_BACKEND_AUDIENCE=https://api.example.com
+```
+
+## Metadata 404, or `Invalid Issuer` on otherwise valid tokens
+
+**Symptom:** Every request fails with `500 { "message": "internal server error" }`, the underlying error being `MonoCloudHttpError: Error while fetching metadata. Unexpected status code: 404`. Or tokens fail with `401` and an internal `MonoCloudTokenError('Invalid Issuer')`.
+
+**Cause:** `MONOCLOUD_BACKEND_TENANT_DOMAIN` points at the wrong URL. Note what the SDK *does* normalize: it strips a single trailing `/`, so `https://acme.us.monocloud.com/` is **not** a problem. What does break things is putting a path on the value (e.g. `.../.well-known/openid-configuration`) — the SDK appends the discovery path itself — or pointing at a host that isn't the token's issuer.
+
+`Invalid Issuer` is a strict string comparison of the token's `iss` claim against the normalized tenant domain, so the two must be the same host (this is separate from the `aud`/`MONOCLOUD_BACKEND_AUDIENCE` check above).
+
+**Fix:** Pass the bare tenant origin — `MONOCLOUD_BACKEND_TENANT_DOMAIN=https://acme.us.monocloud.com` — and confirm it equals the `iss` claim of a decoded token. Confirm `https://<tenant-domain>/.well-known/openid-configuration` returns 200 with `curl`. The value must parse as an absolute URI (Joi `uri()`), so a bare host with no scheme is rejected at startup — see the `MonoCloudValidationError` section above.
 
 ## Diagnostic
 

@@ -160,7 +160,7 @@ MonoCloudJsError: useAuth() can only be used inside a <MonoCloudAuthProvider>...
 function useClient(): MonoCloudWebJSClient;
 ```
 
-Returns the underlying `MonoCloudWebJSClient` instance (the same one the provider built). Use for operations not surfaced on `useAuth()` — typically `client.oidcClient.revokeToken(...)`, or the static `MonoCloudOidcClient.decodeJwt(...)`, etc.
+Returns the underlying `MonoCloudWebJSClient` instance (the same one the provider built). Use for operations not surfaced on `useAuth()` — typically the OIDC-level methods on `client.oidcClient` (e.g. `client.oidcClient.revokeToken(...)`). Statics such as `MonoCloudOidcClient.decodeJwt(...)` need the class itself, which `@monocloud/auth-react` does **not** re-export — import `MonoCloudOidcClient` from `@monocloud/auth-web-js` if you need it.
 
 > Calling mutating methods directly on this client (e.g. `client.signOut()`) bypasses the context's `syncSession`. Prefer the `useAuth()` action; only fall through to `useClient()` when you genuinely need an operation the hook does not expose.
 

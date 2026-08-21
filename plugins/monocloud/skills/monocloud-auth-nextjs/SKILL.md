@@ -1,6 +1,6 @@
 ---
 name: monocloud-auth-nextjs
-description: Use when integrating MonoCloud authentication into a Next.js application — installing or configuring `@monocloud/auth-nextjs`, wiring `authMiddleware()` in `proxy.ts`/`middleware.ts`, reading sessions with `getSession()`/`useAuth()`, protecting routes/pages/APIs with `protect()`/`protectApi()`/`protectPage()`/`protectClientPage()`, rendering `<SignIn>`/`<SignUp>`/`<SignOut>`/`<Protected>`/`<RedirectToSignIn>`, calling `getTokens()`, or troubleshooting MonoCloud env vars (`MONOCLOUD_AUTH_*`), cookie sessions, or auth routes (`/api/auth/signin`, `/callback`, `/userinfo`, `/signout`).
+description: Use when integrating MonoCloud authentication into a Next.js application — installing or configuring `@monocloud/auth-nextjs`, wiring `authMiddleware()` in `proxy.ts`/`middleware.ts`, reading sessions with `getSession()`/`useAuth()`, protecting routes/pages/APIs with `protect()`/`protectApi()`/`protectPage()`/`protectClientPage()`, rendering `<SignIn>`/`<SignUp>`/`<SignOut>`/`<Protected>`/`<RedirectToSignIn>`, calling `getTokens()`, handling OIDC back-channel logout via `onBackChannelLogout` / `/api/auth/backchannel-logout`, or troubleshooting MonoCloud env vars (`MONOCLOUD_AUTH_*`), cookie sessions, or auth routes (`/api/auth/signin`, `/callback`, `/userinfo`, `/signout`, `/backchannel-logout`).
 license: MIT
 ---
 
@@ -52,6 +52,7 @@ Optional:
 | `MONOCLOUD_AUTH_SIGNIN_URL`    | `/api/auth/signin`     |                                    |
 | `MONOCLOUD_AUTH_SIGNOUT_URL`   | `/api/auth/signout`    |                                    |
 | `MONOCLOUD_AUTH_USER_INFO_URL` | `/api/auth/userinfo`   |                                    |
+| `MONOCLOUD_AUTH_BACK_CHANNEL_LOGOUT_URL` | `/api/auth/backchannel-logout` | Back-channel logout route (no `NEXT_PUBLIC_` mirror needed) |
 
 If you override a route (e.g. `MONOCLOUD_AUTH_SIGNIN_URL`), also set the matching `NEXT_PUBLIC_MONOCLOUD_AUTH_SIGNIN_URL` so client-side helpers (`useAuth`, `<SignIn>`, `<SignOut>`, etc.) discover it, AND update the redirect URI in the MonoCloud dashboard.
 
@@ -97,7 +98,7 @@ Then use that shared client wherever the SDK helper is needed, for example `mono
 
 ## Wiring the middleware/proxy
 
-The middleware/proxy handles auth routes (`/api/auth/signin`, `/callback`, `/userinfo`, `/signout`) internally **and** enforces route protection. You do not need a `[...monocloud]` catch-all when using the middleware.
+The middleware/proxy handles auth routes (`/api/auth/signin`, `/callback`, `/userinfo`, `/signout`, `/backchannel-logout`) internally **and** enforces route protection. You do not need a `[...monocloud]` catch-all when using the middleware.
 
 **File location depends on Next.js version:**
 
@@ -351,6 +352,51 @@ await getTokens({
 });
 ```
 
+## Back-channel logout (OIDC)
+
+MonoCloud can notify the app that a session must end, without any browser involvement. The endpoint lives at `/api/auth/backchannel-logout` (override with `MONOCLOUD_AUTH_BACK_CHANNEL_LOGOUT_URL` or `routes.backChannelLogout`) and is dispatched by **both** `authMiddleware()` and `monoCloudAuth()`.
+
+The callback is **constructor-only** — there is no env var for it. The route answers `404` until `onBackChannelLogout` is configured on a client instance, and the mounted handler must come from *that* instance:
+
+```ts
+// src/monocloud.ts
+import { MonoCloudNextClient } from "@monocloud/auth-nextjs";
+
+export const monoCloud = new MonoCloudNextClient({
+  session: { store: redisSessionStore },
+  onBackChannelLogout: async (sub, sid) => {
+    // Both args are optional (at least one of them is always present).
+    // The SDK's store key is a random UUID, so keep your own sub/sid -> key
+    // index in the store if you need to revoke by either identifier.
+    await redisSessionStore.deleteBySid(sid);
+  },
+});
+```
+
+```ts
+// src/proxy.ts (Next 16+) or src/middleware.ts (Next 13–15)
+import { monoCloud } from "./monocloud";
+
+export default monoCloud.authMiddleware();
+```
+
+Handler responses:
+
+| Status | When |
+| ------ | ---- |
+| `204` | Logout token validated and `onBackChannelLogout` completed |
+| `404` | No `onBackChannelLogout` configured, or the path is not the configured route |
+| `405` | The configured route was hit with anything other than `POST` |
+| `400` | `logout_token` missing from the form body or invalid — body is `{ "error": "invalid_request", "error_description": "The logout token is missing or invalid." }` |
+| `500` | Configuration, discovery/JWKS, or `onBackChannelLogout` callback failure |
+
+Notes:
+
+- Notifications are `application/x-www-form-urlencoded` **`POST`** requests carrying `logout_token`; no session cookie is involved.
+- The `onError` handler passed to `authMiddleware()` / `monoCloudAuth()` also covers back-channel logout errors; a missing or invalid logout token reaches it as a `MonoCloudTokenError` (or `MonoCloudValidationError` when the token is absent). Supplying `onError` replaces the `400` response, so send your own.
+- Pair `onBackChannelLogout` with `session.store` — with cookie-only sessions there is nothing server-side to revoke.
+- Keep the route inside `config.matcher` (the recommended matcher covers it) and register the URL as the client's back-channel logout URI in the MonoCloud dashboard.
+
 ## Alternative: catch-all route (only when middleware can't be used)
 
 The middleware handles auth routes for you. If you cannot use middleware (rare — e.g. infrastructure constraints), mount `monoCloudAuth()` on a catch-all instead:
@@ -359,7 +405,12 @@ The middleware handles auth routes for you. If you cannot use middleware (rare �
 // App Router
 // src/app/api/auth/[...monocloud]/route.ts
 import { monoCloudAuth } from "@monocloud/auth-nextjs";
-export const GET = monoCloudAuth();
+
+const handler = monoCloudAuth();
+
+// Back-channel logout notifications and the `form_post` response mode arrive as POST,
+// so the same handler must be exported for POST as well as GET.
+export { handler as GET, handler as POST };
 ```
 
 ```ts
@@ -368,6 +419,8 @@ export const GET = monoCloudAuth();
 import { monoCloudAuth } from "@monocloud/auth-nextjs";
 export default monoCloudAuth();
 ```
+
+The Pages Router default export already receives every HTTP method, so it needs no extra export — only the App Router needs the explicit `POST`.
 
 Do not do this **in addition** to `authMiddleware()` — pick one. The default and recommended path is `authMiddleware()`.
 
@@ -381,6 +434,7 @@ Do not do this **in addition** to `authMiddleware()` — pick one. The default a
 6. **Putting `<Protected>` or `useAuth()` in a Server Component.** Both require `"use client"`. Use `getSession()` for server-side conditional rendering.
 7. **Forgetting `NEXT_PUBLIC_*` mirror when overriding auth routes.** Client helpers won't find the new URL otherwise.
 8. **Mutating cookies after `getSession()` in middleware.** Pass the response object to `getSession(req, res)` (and return that response) so cookie refreshes are preserved.
+9. **Back-channel logout route returning 404.** `onBackChannelLogout` has no env var — it must be passed to `new MonoCloudNextClient({ onBackChannelLogout })`, and that instance's `authMiddleware()` / `monoCloudAuth()` must be the one mounted. Notifications are `POST`, so an App Router catch-all must export the handler for `POST` as well as `GET`.
 
 ## Onboarding checklist for a fresh integration
 

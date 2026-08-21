@@ -18,7 +18,7 @@ The surface most apps actually reach for — full signatures and types follow be
 import { ... } from '@monocloud/backend-node/fastify';
 ```
 
-The root `@monocloud/backend-node` exports the same shared types and the client class, but **not** `protectApi` (that lives in the framework subpaths).
+The root `@monocloud/backend-node` exports the same shared types and the client class, but **not** `protectApi` (that lives in the framework subpaths). One type is root-only: `MtlsEndpointAliases` is re-exported from the package root and **not** from `/fastify` (or `/express`) — import it from `@monocloud/backend-node` if you need it.
 
 The package also ships two helper subpaths that re-export from `@monocloud/auth-core`:
 
@@ -46,7 +46,7 @@ type ProtectHook = (
 ) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 ```
 
-Without a `client`, a new `MonoCloudBackendNodeClient` is constructed from environment variables on first call.
+Without a `client`, a new `MonoCloudBackendNodeClient` is constructed from environment variables at the moment `protectApi()` is called — env vars are read and Joi-validated then, so a missing/non-URL `tenantDomain` or `audience` throws `MonoCloudValidationError` at startup rather than per request. Discovery metadata and JWKS are still fetched lazily, on the first request the hook validates.
 
 ## Types — framework-specific
 

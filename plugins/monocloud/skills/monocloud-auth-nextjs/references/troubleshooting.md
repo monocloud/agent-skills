@@ -146,6 +146,41 @@ If you must read a token in a Server Component, accept that it may be re-fetched
 
 **Verify:** A `console.warn` like `"Cookies can only be modified in a Server Action or Route Handler"` (or similar Next.js wording) in your dev server output is the smoking gun.
 
+## Back-channel logout endpoint returns 404, 405, or 400
+
+**Symptom:** MonoCloud reports failed back-channel logout deliveries. Hitting `/api/auth/backchannel-logout` yields `404` (empty body), `405`, or `400 {"error":"invalid_request","error_description":"The logout token is missing or invalid."}`.
+
+**Cause, per status:**
+
+- `404` — no `onBackChannelLogout` callback is configured on the client instance whose `authMiddleware()` / `monoCloudAuth()` is mounted. The callback is **constructor-only**; there is no `MONOCLOUD_AUTH_*` env var for it, so setting env vars alone can never activate the route. A `404` also appears when `routes.backChannelLogout` / `MONOCLOUD_AUTH_BACK_CHANNEL_LOGOUT_URL` was overridden and the default path is being probed. (Before `@monocloud/auth-nextjs@0.2.7` the route `404`'d *even when* the callback was configured — upgrade if you see that.)
+- `405` — the route was reached with something other than `POST`. Notifications are `application/x-www-form-urlencoded` `POST` requests. In an App Router catch-all mounting `monoCloudAuth()`, exporting only `GET` produces this (or a Next.js `405`); export the handler for `POST` too. The callback check runs first, so an unconfigured route answers `404` regardless of method.
+- `400` — the request had no `logout_token` form field, or the token failed validation (bad signature, wrong issuer/audience, missing `events` back-channel-logout claim, no `sub` and no `sid`, or a forbidden `nonce`). This is the spec-compliant response; `500` is reserved for configuration, discovery/JWKS, and `onBackChannelLogout` callback failures.
+
+**Fix:**
+
+```ts
+// src/monocloud.ts
+import { MonoCloudNextClient } from "@monocloud/auth-nextjs";
+
+export const monoCloud = new MonoCloudNextClient({
+  session: { store: redisSessionStore },
+  onBackChannelLogout: async (sub, sid) => {
+    await redisSessionStore.deleteBySid(sid);
+  },
+});
+```
+
+```ts
+// src/app/api/auth/[...monocloud]/route.ts — only if you cannot use middleware
+import { monoCloud } from "@/monocloud";
+
+const handler = monoCloud.monoCloudAuth();
+
+export { handler as GET, handler as POST };
+```
+
+Also keep the route inside `config.matcher` and register the URL in the MonoCloud dashboard. To take over the error response, pass `onError` to `authMiddleware()` / `monoCloudAuth()` — it now fires for back-channel logout too, and an invalid token arrives as a `MonoCloudTokenError`.
+
 ## Older training-data SDK ghosts
 
 **Symptom:** Code references `MonoCloudAuthProvider`, `useUser`, `monoCloudMiddleware`, or a developer-written `app/api/auth/[...monocloud]/route.ts` as the default integration. None of those exist in `@monocloud/auth-nextjs`.

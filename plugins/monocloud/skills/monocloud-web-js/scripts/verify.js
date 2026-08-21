@@ -61,6 +61,9 @@ if (!pkg) {
   if (deps['@monocloud/auth-nextjs']) {
     warn('@monocloud/auth-nextjs is also installed. For Next.js apps prefer monocloud-auth-nextjs; the web-js SDK is for vanilla browser SPAs.');
   }
+  if (deps['@monocloud/auth-react']) {
+    warn('@monocloud/auth-react is also installed. For React SPAs prefer monocloud-auth-react (<MonoCloudAuthProvider> / useAuth); web-js is the underlying SDK it wraps.');
+  }
   if (deps['@monocloud/backend-node']) {
     warn('@monocloud/backend-node is installed. That SDK is for server-side API token validation, not browser sign-in — unrelated to web-js.');
   }
@@ -73,7 +76,7 @@ if (!pkg) {
   const bundler = bundlers.find((b) => deps[b]);
   if (bundler) pass(`Bundler detected: ${bundler}`);
 
-  if (deps.react)   warn('React detected — consider a React-specific SDK if/when one becomes available.');
+  if (deps.react && !deps['@monocloud/auth-react']) warn('React detected — @monocloud/auth-react wraps this SDK with <MonoCloudAuthProvider>, useAuth(), and components (skill: monocloud-auth-react). Prefer it for React SPAs.');
   if (deps.vue)     warn('Vue detected — consider a Vue-specific SDK if/when one becomes available.');
   if (deps['@angular/core']) warn('Angular detected — consider an Angular-specific SDK if/when one becomes available.');
   if (deps.svelte)  warn('Svelte detected — consider a Svelte-specific SDK if/when one becomes available.');

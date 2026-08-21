@@ -57,7 +57,7 @@ for (const name of REQUIRED_ENV) {
   else warn(`${name} not found in process env${envFileExists ? ' or .env/.env.local' : ' and no .env/.env.local present'}. Set it via your runtime (Docker, systemd, PaaS, --env-file, etc.) before starting the app.`);
 }
 
-const introspectAll = (process.env.MONOCLOUD_BACKEND_INTROSPECT_JWT_TOKENS || env.MONOCLOUD_BACKEND_INTROSPECT_JWT_TOKENS) === 'true';
+const introspectAll = String(process.env.MONOCLOUD_BACKEND_INTROSPECT_JWT_TOKENS || env.MONOCLOUD_BACKEND_INTROSPECT_JWT_TOKENS || '').trim().toLowerCase() === 'true';
 if (introspectAll) {
   for (const name of INTROSPECTION_ENV) {
     if (process.env[name] || env[name]) pass(`${name} set`);

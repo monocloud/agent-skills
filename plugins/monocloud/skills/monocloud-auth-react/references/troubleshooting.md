@@ -26,14 +26,14 @@ render(
 
 **Symptom:** Sign-in completes at the OP (URL has `?code=…&state=…`), the app re-mounts, but `useAuth().isLoading` never flips to `false`.
 
-**Cause:** `<ProcessCallback>` was added on a dedicated route **and** `autoProcessCallback` was left at its default (`true`) **and** an error in `processCallback()` left the state inconsistent. Or the callback route was registered in the dashboard but the app's router never actually mounted that route component.
+**Cause:** The bootstrap promise never settled. An *error* is not the cause — the provider's `processCallback()` catch sets `isLoading: false` (and stores `error`), and `syncSession()` always sets `isLoading: false`, so failures surface as `error`, not as a permanent spinner. The real culprits are a promise that never resolves: a custom `postCallback` (the client `await`s it at the end of `processCallback()`) that neither resolves nor navigates, or a custom async `IStorage` whose `getItem` never resolves. Also check that `<MonoCloudAuthProvider>` really is an ancestor of the component reading `isLoading`.
 
 **Fix:**
 
-- If you want a dedicated callback page, pass `autoProcessCallback={false}` to the provider and mount `<ProcessCallback>` on that route.
-- If you want the provider to handle it automatically, leave `autoProcessCallback` at its default and **do not** add a separate `<ProcessCallback>` component.
-
-Pick one — never both at once.
+- Make sure a custom `postCallback` always settles — navigate with your router and return; never hand back a promise that never resolves.
+- Make sure a custom `IStorage` resolves every call, including misses (`getItem` → `null`).
+- Check the provider wraps the component reading `isLoading`.
+- Also pick exactly one callback path: either leave `autoProcessCallback` at its default (`true`) and **do not** add a separate `<ProcessCallback>`, or pass `autoProcessCallback={false}` and mount `<ProcessCallback>` on the dedicated route. Never both at once.
 
 ## Callback runs twice (or shows a duplicate loading flicker) in development
 
@@ -43,7 +43,7 @@ Pick one — never both at once.
 
 **Fix:** Don't mount both. If the dedicated `<ProcessCallback>` route is what you want, set `autoProcessCallback={false}`.
 
-If you're not using `<ProcessCallback>` at all, the single dev-only re-render is harmless — the underlying `processCallback()` is idempotent and the second call exits early (URL no longer carries `code`/`state` after the first call cleared them).
+If you're not using `<ProcessCallback>` at all, the single dev-only re-render is harmless — the underlying `processCallback()` is idempotent because the *persisted callback state* is consumed, not the URL: the first call reads the callback state out of `sessionStorage` and immediately clears it, so the second call finds no state and returns early (this holds even with a custom `postCallback` that leaves `code`/`state` in the URL).
 
 ## Changing provider props does nothing
 
@@ -158,7 +158,7 @@ useEffect(() => {
 }, [signInSilent]);
 ```
 
-## `getTokens()` throws `MonoCloudValidationError: Refresh token not found`
+## `getTokens()` throws `MonoCloudValidationError: Session does not contain refresh token`
 
 **Symptom:** Either you called `getTokens({ forceRefresh: true })` or the access token expired and `getTokens()` tried to auto-refresh — both throw.
 
@@ -179,7 +179,7 @@ useEffect(() => {
 
 **Symptom:** Sign-in completes, `getSession()` shows the user, then a moment later `getSession()` returns `undefined`. Only happens with `storage={new MemoryStorage()}`.
 
-**Cause:** The default `postCallback` does `window.location.href = returnUrl` — a full page reload. That re-mounts the app from scratch and wipes `MemoryStorage`.
+**Cause:** When a `returnUrl` was set (`signIn({ returnUrl })` / `<SignIn returnUrl=…>`), the default `postCallback` does `window.location.href = returnUrl` — a full page reload that re-mounts the app from scratch and wipes `MemoryStorage` (the SDK even logs a warning about exactly this). With **no** `returnUrl` the default only strips the callback query params via `history.replaceState` — no navigation, so the in-memory session survives.
 
 **Fix:** Pair `MemoryStorage` with a custom `postCallback` that uses your router (no reload):
 
@@ -197,7 +197,7 @@ Or just keep `LocalStorage` (default — survives reloads) or `SessionStorage` (
 
 **Symptom:** You're running React with SSR (Vite SSR plugin, custom Express+React, etc.) and the first client render warns about a hydration mismatch involving the auth state.
 
-**Cause:** `@monocloud/auth-react` is client-only — every file is `'use client'`. The provider always starts with `isLoading: true` on the client, while on the server `<MonoCloudAuthProvider>` cannot construct a `MonoCloudWebJSClient` (it touches `window`, `localStorage`, etc.). The server-rendered HTML doesn't include auth state; the first client render does.
+**Cause:** `@monocloud/auth-react` is client-only — every runtime file is `'use client'`. Constructing the client during render is actually browser-API-free (the `MonoCloudWebJSClient` constructor only stores options, picks a storage, and news up `MonoCloudOidcClient`; `LocalStorage` touches `window.localStorage` only when one of its methods is called, and `appUrl` falls back to `window.location.origin` lazily in a getter). What is client-only is the *bootstrap*: the provider runs `processCallback()` / `getSession()` from a `useEffect`, which never fires on the server. So the server-rendered HTML always carries the initial `isLoading: true` / unauthenticated state, and the first client render replaces it.
 
 **Fix:** Don't render auth-state-dependent UI in your SSR output. Either:
 
