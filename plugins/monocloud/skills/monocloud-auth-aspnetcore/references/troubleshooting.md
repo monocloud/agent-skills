@@ -1,6 +1,6 @@
 # Troubleshooting — `MonoCloud.Authentication.Api`
 
-Quick reference for the most common things that go wrong when validating MonoCloud-issued access tokens in an ASP.NET Core API, grounded in `MonoCloud.Authentication.Api@0.1.4`. Each entry is **symptom → root cause → fix**.
+Quick reference for the most common things that go wrong when validating MonoCloud-issued access tokens in an ASP.NET Core API, grounded in `MonoCloud.Authentication.Api@0.1.5`. Each entry is **symptom → root cause → fix**.
 
 This SDK is a standard ASP.NET Core **authentication handler / scheme** (built on `Microsoft.AspNetCore.Authentication.JwtBearer`), registered via `AddAuthentication(scheme).AddMonoCloudAuthentication(...)`. It only *authenticates* and shapes claims — authorization (scopes/groups) is the **standard** policy system (`AddAuthorization` / `[Authorize(Policy = …)]` / `RequireClaim`). There is no `protectApi` factory, no `[MonoCloudAuthorize]` attribute, and no environment-variable configuration — those belong to the Node express/fastify SDK, not this one.
 
@@ -77,7 +77,7 @@ options.ClientAuth = new ClientSecretAuth(builder.Configuration["MonoCloud:Clien
 
 **Symptom:** An opaque-token request returns **HTTP 500** instead of a `401`. `OnAuthenticationFailed` fires with a real exception — an `HttpRequestException` (transport error or non-2xx introspection response via `EnsureSuccessStatusCode`), a `JsonException` (malformed introspection JSON), a discovery error, or a client-auth failure.
 
-**Cause:** As of 0.1.4 the handler separates introspection **infrastructure** failures from token **verdicts**. Infrastructure failures — and exceptions thrown by your own opaque-path event handlers — raise `OnAuthenticationFailed` with the real exception and then **rethrow**, surfacing as a 500, instead of the old misleading 401 `invalid_token`. Genuine token verdicts (`active: false`, certificate-binding mismatch) still produce a `401`.
+**Cause:** As of 0.1.4 the handler separates introspection **infrastructure** failures from token **verdicts**. Infrastructure failures — and exceptions thrown by your own opaque-path event handlers — raise `OnAuthenticationFailed` with the real exception and then **rethrow**, surfacing as a 500, instead of the old misleading 401 `invalid_token`. Genuine token verdicts (`active: false`, certificate-binding mismatch) still produce a `401`. Note the boundary moved in **0.1.5** for one case: a `CertificateRetriever` that **throws** is now a verdict too — it fails authentication with a 401 `invalid_token` challenge carrying `Client certificate is malformed`, instead of surfacing a 500.
 
 **Fix:** A 500 here means introspection could not complete — verify the tenant is reachable, the introspection endpoint/credentials are correct, and the discovery document is valid. To restore the old behavior and turn an infrastructure failure back into a 401, handle `OnAuthenticationFailed` and set `context.Result`:
 
@@ -185,15 +185,17 @@ If you leave mapping on, set `NameClaimType` / `RoleClaimType` to the mapped URI
 
 ## mTLS certificate-binding validation failing
 
-**Symptom:** Certificate-bound tokens are rejected; `OnAuthenticationFailed` reports one of: `"Client certificate is not present"`, `"Access token does not contain a 'cnf' … claim"`, `"Malformed 'cnf' claim …"`, `"The 'cnf' claim does not contain an 'x5t#S256' member …"`, or `"… certificate binding validation failed"`.
+**Symptom:** Certificate-bound tokens are rejected with a 401; `OnAuthenticationFailed` reports one of: `"Client certificate is malformed"`, `"Client certificate is not present"`, `"Access token does not contain a 'cnf' … claim"`, `"Malformed 'cnf' claim …"`, `"The 'cnf' claim does not contain an 'x5t#S256' member …"`, or `"… certificate binding validation failed"`. Or: binding starts failing right after upgrading to 0.1.5 on traffic that previously passed.
 
-**Cause:** Binding is opt-in per request via `options.ValidateCertificateBinding` (a `Func<HttpContext, bool>` defaulting to `_ => false`). When it returns `true`, the handler compares the presented client cert's base64url SHA-256 thumbprint against the token's `cnf.x5t#S256` claim (constant-time). Failures: no client cert reached the handler, the token isn't bound, or the thumbprints differ.
+**Cause:** As of **0.1.5** `options.ValidateCertificateBinding` is a `CertificateBindingValidation` **enum** (through 0.1.4 it was a `Func<HttpContext, bool>` defaulting to `_ => false`, i.e. never validating), and the new default `WhenPresent` **validates whenever the token's `cnf` claim carries an `x5t#S256` thumbprint** — so bound tokens that used to sail through are now checked. When validation runs, the handler compares the presented client cert's base64url SHA-256 thumbprint against `cnf.x5t#S256` (constant-time). Failures: `CertificateRetriever` threw (`Client certificate is malformed` — a 401 verdict as of 0.1.5, no longer a 500), no client cert reached the handler, the token carries no `cnf` (only under `Required`), or the thumbprints differ.
 
 **Fix:**
 
-1. Enable binding only for the requests that need it:
+1. Pick the mode that matches the endpoint's contract — it is set once on the options, not per request:
    ```csharp
-   options.ValidateCertificateBinding = ctx => true;   // or gate by path / header
+   options.ValidateCertificateBinding = CertificateBindingValidation.WhenPresent;       // default — validate cnf-bearing tokens
+   options.ValidateCertificateBinding = CertificateBindingValidation.Required;          // also reject tokens with no cnf (replaces `_ => true`)
+   options.ValidateCertificateBinding = CertificateBindingValidation.DangerouslyIgnore; // opt out entirely (replaces `_ => false`)
    ```
 2. Make sure the client certificate actually reaches the app. By default the cert is read via `context.Connection.GetClientCertificateAsync()`. Behind a reverse proxy/load balancer that terminates TLS (nginx, ALB, YARP), forward the client cert and supply a custom retriever:
    ```csharp
@@ -297,7 +299,7 @@ Use `MonoCloud.Management` only to *call* the admin API (create users, list clie
 
 ## `NETSDK` / target-framework error — package won't restore
 
-**Symptom:** `error NU1202: Package MonoCloud.Authentication.Api 0.1.4 is not compatible with …`, or restore fails on an older project.
+**Symptom:** `error NU1202: Package MonoCloud.Authentication.Api 0.1.5 is not compatible with …`, or restore fails on an older project.
 
 **Cause:** The package targets **net8.0, net9.0 and net10.0** (the `net6.0`/`net7.0` targets were dropped in 0.1.3). A project on `net6.0`, `net7.0`, `netstandard2.0`, `netcoreapp3.1`, `net5.0`, or `net framework` cannot consume it.
 

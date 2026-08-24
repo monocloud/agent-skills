@@ -69,6 +69,25 @@ if (introspectAll) {
   }
 }
 
+const CERT_BINDING_MODES = ['when_present', 'required', 'dangerously_ignore'];
+const readEnv = (name) => String(process.env[name] || env[name] || '').trim();
+
+const certBinding = readEnv('MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING');
+if (certBinding) {
+  if (CERT_BINDING_MODES.includes(certBinding)) pass(`MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING=${certBinding}`);
+  else fail(`MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING="${certBinding}" is invalid — use ${CERT_BINDING_MODES.join(' | ')} (default when_present). It is no longer a boolean; any other value throws MonoCloudValidationError at startup.`);
+}
+
+const responseTimeout = readEnv('MONOCLOUD_BACKEND_RESPONSE_TIMEOUT');
+if (responseTimeout && !(Number.isFinite(Number(responseTimeout)) && Number(responseTimeout) >= 1000)) {
+  fail(`MONOCLOUD_BACKEND_RESPONSE_TIMEOUT="${responseTimeout}" is invalid — milliseconds, must be a number >= 1000 (default 10000).`);
+}
+
+const introspectionCache = readEnv('MONOCLOUD_BACKEND_INTROSPECTION_CACHE_DURATION');
+if (introspectionCache && !(Number.isFinite(Number(introspectionCache)) && Number(introspectionCache) >= 0)) {
+  fail(`MONOCLOUD_BACKEND_INTROSPECTION_CACHE_DURATION="${introspectionCache}" is invalid — seconds, must be a number >= 0 (0 disables introspection caching; default 300).`);
+}
+
 const tag = { pass: 'PASS', warn: 'WARN', fail: 'FAIL' };
 for (const [k, m] of findings) console.log(`[${tag[k]}] ${m}`);
 const failed = findings.filter(([k]) => k === 'fail').length;

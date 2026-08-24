@@ -3,7 +3,7 @@
 // Usage: node skills/monocloud-auth-aspnetcore/scripts/verify.js [project-dir]
 // Cross-platform: pure Node — no .NET tooling required to run.
 //
-// Grounded in MonoCloud.Authentication.Api v0.1.4:
+// Grounded in MonoCloud.Authentication.Api v0.1.5:
 //   - PackageReference id:   MonoCloud.Authentication.Api
 //   - Default scheme:        "MonoCloud" (MonoCloudAuthenticationDefaults.AuthenticationScheme)
 //   - DI extension:          AddAuthentication(scheme).AddMonoCloudAuthentication(options => { ... })
@@ -244,6 +244,27 @@ if (cachingReferenced) {
   } else {
     warn('EnableCaching / IIntrospectionCache is referenced but no AddSingleton<IIntrospectionCache, ...> registration was found. With EnableCaching = true and no registered cache, PostConfigure throws ArgumentException at startup. Register your cache as a singleton.');
   }
+}
+
+// ---------------------------------------------------------------------------
+// 8. Certificate binding: ValidateCertificateBinding is an enum as of 0.1.5.
+// ---------------------------------------------------------------------------
+// Through 0.1.4 it was a Func<HttpContext, bool> defaulting to `_ => false`;
+// delegate-style assignments no longer compile. The default is now
+// CertificateBindingValidation.WhenPresent, which validates any token whose
+// `cnf` claim carries an `x5t#S256` thumbprint.
+const certBindingAssign = /ValidateCertificateBinding\s*=\s*([^;\n]+)/.exec(allCs);
+if (certBindingAssign) {
+  const rhs = certBindingAssign[1].trim();
+  if (rhs.includes('=>')) {
+    fail(`ValidateCertificateBinding is assigned a delegate (${rhs}) — as of 0.1.5 it is a CertificateBindingValidation enum, so this no longer compiles. Use CertificateBindingValidation.Required (replaces "_ => true"), .DangerouslyIgnore (replaces "_ => false"), or .WhenPresent (the default).`);
+  } else if (/CertificateBindingValidation\./.test(rhs)) {
+    pass(`ValidateCertificateBinding set to ${rhs}.`);
+  } else {
+    warn(`ValidateCertificateBinding is assigned "${rhs}" — it must be a CertificateBindingValidation value (WhenPresent | Required | DangerouslyIgnore); an undefined value throws ArgumentException at startup.`);
+  }
+} else if (/\bCertificateRetriever\b/.test(allCs)) {
+  warn('CertificateRetriever is customized but ValidateCertificateBinding is not set — the 0.1.5 default (CertificateBindingValidation.WhenPresent) validates any token whose "cnf" claim carries an "x5t#S256" thumbprint. Use .Required to also reject unbound tokens, or .DangerouslyIgnore to opt out.');
 }
 
 // ---------------------------------------------------------------------------

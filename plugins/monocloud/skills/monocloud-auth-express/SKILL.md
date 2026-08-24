@@ -60,6 +60,9 @@ Optional tuning:
 | `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL`        | `false` | If `true`, all listed groups must match                    |
 | `MONOCLOUD_BACKEND_JWKS_CACHE_DURATION`     | `300`   | Seconds to cache the JWKS                                  |
 | `MONOCLOUD_BACKEND_METADATA_CACHE_DURATION` | `300`   | Seconds to cache the OIDC discovery doc                    |
+| `MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING` | `when_present` | Certificate-binding mode: `when_present`, `required`, or `dangerously_ignore` |
+| `MONOCLOUD_BACKEND_INTROSPECTION_CACHE_DURATION` | `300`   | Seconds to cache introspection results (`0` disables caching) |
+| `MONOCLOUD_BACKEND_RESPONSE_TIMEOUT`        | `10000` | Milliseconds before discovery / JWKS / introspection requests are aborted (min `1000`) |
 
 ## Basic wiring
 
@@ -104,13 +107,14 @@ Two-call pattern: `protectApi()` builds a **factory** once (parses env, loads JW
 interface ProtectOptions {
   scopes?: string[]; // require all listed scopes
   groups?: string[]; // require group membership (any-of by default)
-  validateCertificateBinding?: boolean; // mTLS-bound token validation
 }
+// Declared as Omit<ValidateAccessTokenOptions, 'clientCertificate'> —
+// certificate binding is now a CLIENT option, not a per-route one.
 ```
 
 - **scopes**: AND semantics — the token must carry every listed scope (string match against the `scope` claim).
 - **groups**: OR by default; flip with `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL=true` (or per-client `groupOptions.matchAll`). The claim name comes from `MONOCLOUD_BACKEND_GROUPS_CLAIM`.
-- **validateCertificateBinding**: enforces the `cnf.x5t#S256` confirmation claim against the client's TLS cert. Requires a `certificateResolver` to be wired (see "Advanced" below).
+- **certificate binding is not a per-route option any more.** It moved to the client: `validateCertificateBinding?: CertificateBindingValidation` (env `MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING`), with three modes — `'when_present'` (**default**: validate whenever the token's `cnf` claim carries an `x5t#S256` thumbprint), `'required'` (always validate, rejecting tokens with no `cnf` claim), `'dangerously_ignore'` (never validate, even when the token carries a `cnf` claim). Because the default is `'when_present'`, certificate-bound tokens are now validated automatically — wire a `certificateResolver` (see "Advanced" below) or they fail with `Client certificate is not present`.
 
 ## Client constructor options
 
@@ -132,17 +136,22 @@ interface MonoCloudBackendNodeClientOptions {
   jwksCacheDuration?: number;
   metadataCacheDuration?: number;
   introspectJwtTokens?: boolean;
+  validateCertificateBinding?: CertificateBindingValidation; // 'when_present' (default) | 'required' | 'dangerously_ignore'
+  introspectionCacheDuration?: number;  // seconds, default 300 — caps cached introspection results; 0 disables caching
+  responseTimeout?: number;             // ms, default 10000 (min 1000) — aborts discovery / JWKS / introspection requests
   cache?: IIntrospectionCache;
   fetcher?: typeof fetch;              // (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 }
 ```
 
-`cache?: IIntrospectionCache` is constructor-only; pass it in code to cache introspection results by raw token until the token expires. Only tokens validated via introspection are cached (opaque tokens, and JWTs when `introspectJwtTokens` is `true`); locally-validated JWTs are never cached. On a cache **hit** the SDK still re-checks the requested `scopes`, `groups`, and certificate binding against the cached claims, so a cached entry never bypasses per-route authorization.
+`cache?: IIntrospectionCache` is constructor-only; pass it in code to cache introspection results by raw token. An entry expires at `min(claims.exp, now() + introspectionCacheDuration)` — so no entry outlives `introspectionCacheDuration` (default `300` s) however long the token lives — and `introspectionCacheDuration: 0` disables caching entirely even when a `cache` is supplied. Only tokens validated via introspection are cached (opaque tokens, and JWTs when `introspectJwtTokens` is `true`); locally-validated JWTs are never cached. An `active: false` verdict is cached too and replayed as `MonoCloudTokenError('Token is not active. A cached introspection result reported active=false', 'inactive_token')` → 401 until it expires. The result is cached as soon as introspection returns it; the requested `scopes`, `groups` and the client-level certificate-binding check then run **per route** against those claims — cached or fresh — so a cached entry never bypasses per-route authorization.
 
 ## Default responses
 
 - No `Authorization: Bearer <token>` header (and no custom `tokenResolver`): `401 { "message": "unauthorized" }` with a `WWW-Authenticate: Bearer` header.
 - Token validation fails (signature, audience, issuer, expiry, mismatched cnf, etc.): `401 { "message": "unauthorized" }` with `WWW-Authenticate: Bearer error="invalid_token"`.
+- Introspection reports the token inactive (`active: false`), or a still-fresh cached `active: false` verdict is replayed: `401 { "message": "unauthorized" }` — a `MonoCloudTokenError` with `code: 'inactive_token'` (mapped to 401, not 403).
+- A discovery / JWKS / introspection request exceeds `responseTimeout` (default `10000` ms): the request is aborted and a `MonoCloudHttpError` with **no** status is thrown → `503 { "message": "service unavailable" }`.
 - Token is valid but missing required scopes or groups: `403 { "message": "forbidden" }` with `WWW-Authenticate: Bearer error="insufficient_scope"`.
 - Authorization-server unreachable / 5xx / 429 (network or outage): `503 { "message": "service unavailable" }` (no `WWW-Authenticate`).
 - Introspection or config failure (`MonoCloudValidationError`, `MonoCloudOPError`, or a non-5xx `MonoCloudHttpError`): `500 { "message": "internal server error" }`.
@@ -182,6 +191,7 @@ declare global {
 import {
   protectApi,
   MonoCloudBackendNodeClient,
+  type AuthenticatedExpressRequest,
   type IIntrospectionCache,
 } from "@monocloud/backend-node/express";
 
@@ -189,24 +199,23 @@ import {
 const client = new MonoCloudBackendNodeClient({
   tenantDomain: "https://acme.us.monocloud.com",
   audience: "https://api.example.com",
-  cache: redisCache, // your IIntrospectionCache implementation — caches introspection results by token until exp
+  cache: redisCache, // your IIntrospectionCache implementation
+  introspectionCacheDuration: 300, // seconds; caps every cache entry (0 disables caching)
   introspectJwtTokens: false,
+  responseTimeout: 10000, // ms; bounds discovery / JWKS / introspection requests
+  validateCertificateBinding: "required", // 'when_present' (default) | 'required' | 'dangerously_ignore'
 });
 
 const protect = protectApi(client, {
   // Pull token from somewhere other than Authorization: Bearer
   tokenResolver: async (req) => req.cookies.access_token,
-  // Provide the client cert for mTLS-bound tokens (use with validateCertificateBinding)
+  // Required whenever certificate binding is validated — the SDK never reads the cert off the request itself
   certificateResolver: async (req) => req.headers["x-client-cert"] as string,
 });
 
-app.get(
-  "/api/secure",
-  protect({ validateCertificateBinding: true }),
-  (req, res) => {
-    res.json((req as AuthenticatedExpressRequest).claims);
-  },
-);
+app.get("/api/secure", protect(), (req, res) => {
+  res.json((req as AuthenticatedExpressRequest).claims);
+});
 ```
 
 `IIntrospectionCache` interface (implement for Redis, in-memory, etc.):
@@ -223,7 +232,7 @@ interface IIntrospectionCache {
 }
 ```
 
-Caching is keyed on the raw token string. The exact validity check is `cached.exp > now() + clockSkew - clockTolerance`, i.e. a cached entry stays valid until `claims.exp + clockTolerance - clockSkew < now()`. With the defaults (`clockSkew: 0`, `clockTolerance: 60`) the cache will keep returning a claim for up to ~60 seconds **past** the token's `exp`. Lower `clockTolerance` (e.g. to `0`) for strict expiry; raise it for higher hit rates at the cost of accepting slightly-expired tokens.
+Caching is keyed on the raw token string. Entries are written with `expiresAt = min(claims.exp, now() + introspectionCacheDuration)` (or `now() + introspectionCacheDuration` when the claims carry no `exp`), so `introspectionCacheDuration` — default `300` s — is the hard ceiling on any entry's life. On read, the validity check is `cached.exp > now() + clockSkew - clockTolerance`, i.e. a cached entry stays valid until `claims.exp + clockTolerance - clockSkew < now()`. With the defaults (`clockSkew: 0`, `clockTolerance: 60`) the cache will keep returning a claim for up to ~60 seconds **past** the token's `exp`. Lower `clockTolerance` (e.g. to `0`) for strict expiry; raise it for higher hit rates at the cost of accepting slightly-expired tokens. A cached `active: false` entry short-circuits differently: while its own `exp` is still in the future it throws `inactive_token` immediately — no `clockSkew`/`clockTolerance` grace, no re-introspection.
 
 ## JWT vs. introspection — how the SDK decides
 
@@ -255,10 +264,10 @@ This means: **JWT tokens don't require client credentials.** Opaque tokens do. I
 
 Re-exported from `@monocloud/auth-core` via `@monocloud/backend-node`:
 
-- `AccessTokenClaims`, `JwtClaims`, `Jwk`, `Jwks`, `IssuerMetadata`, `ClientAuthMethod`
+- `AccessTokenClaims`, `JwtClaims`, `Jwk`, `Jwks`, `IssuerMetadata`, `ClientAuthMethod`, `CertificateBindingValidation`, `MonoCloudTokenErrorCode`
 - `MonoCloudAuthBaseError`, `MonoCloudValidationError`, `MonoCloudOPError`, `MonoCloudHttpError`, `MonoCloudTokenError`
 
-A failed scope/group check throws `MonoCloudTokenError` with `code` `'insufficient_scope'` or `'insufficient_groups'` (messages `'Token is missing required scopes'` / `'Token is missing required groups'`) — the middleware maps those two **codes** (not the message strings) to 403. Any other `MonoCloudTokenError` (e.g. `code: 'invalid_token'`) becomes 401. `MonoCloudValidationError` and `MonoCloudOPError` now map to **500**, and a `MonoCloudHttpError` with no status / a 5xx / a 429 maps to **503**.
+A failed scope/group check throws `MonoCloudTokenError` with `code` `'insufficient_scope'` or `'insufficient_groups'` (messages `'Token is missing required scopes'` / `'Token is missing required groups'`) — the middleware maps those two **codes** (not the message strings) to 403. The full `MonoCloudTokenErrorCode` union is `'invalid_token' | 'inactive_token' | 'insufficient_scope' | 'insufficient_groups'`; anything other than the two above becomes 401, including the new `'inactive_token'` raised when introspection returns `active: false`. `MonoCloudValidationError` and `MonoCloudOPError` now map to **500**, and a `MonoCloudHttpError` with no status / a 5xx / a 429 maps to **503**.
 
 ## Deeper reference
 

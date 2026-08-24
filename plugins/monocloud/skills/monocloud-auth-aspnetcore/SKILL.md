@@ -1,6 +1,6 @@
 ---
 name: monocloud-auth-aspnetcore
-description: Use when validating MonoCloud access tokens in an ASP.NET Core API / resource server — installing or configuring the `MonoCloud.Authentication.Api` NuGet package, wiring `AddAuthentication(...).AddMonoCloudAuthentication(...)` and the `"MonoCloud"` scheme, setting `MonoCloudAuthenticationOptions` (`Authority`, `Audience`, `ClientId`, `ClientAuth`), validating JWT vs opaque (RFC 7662 introspection) bearer tokens, enforcing scope/group authorization via standard `[Authorize(Policy=…)]` / `RequireClaim` policies, caching introspection results with a singleton `IIntrospectionCache`, mTLS certificate-bound tokens (`ValidateCertificateBinding` / `cnf` / `x5t#S256`), picking a client-auth method (`client_secret_basic`/`client_secret_post`/`client_secret_jwt`/`private_key_jwt`/`tls_client_auth`/`spiffe_jwt`/`spiffe_x509`), or troubleshooting 401/403 / `MapInboundClaims` / `IIntrospectionCache not found` errors.
+description: Use when validating MonoCloud access tokens in an ASP.NET Core API / resource server — installing or configuring the `MonoCloud.Authentication.Api` NuGet package, wiring `AddAuthentication(...).AddMonoCloudAuthentication(...)` and the `"MonoCloud"` scheme, setting `MonoCloudAuthenticationOptions` (`Authority`, `Audience`, `ClientId`, `ClientAuth`), validating JWT vs opaque (RFC 7662 introspection) bearer tokens, enforcing scope/group authorization via standard `[Authorize(Policy=…)]` / `RequireClaim` policies, caching introspection results with a singleton `IIntrospectionCache`, mTLS certificate-bound tokens (`ValidateCertificateBinding` / `CertificateBindingValidation` — `WhenPresent`/`Required`/`DangerouslyIgnore` — `cnf` / `x5t#S256`), picking a client-auth method (`client_secret_basic`/`client_secret_post`/`client_secret_jwt`/`private_key_jwt`/`tls_client_auth`/`spiffe_jwt`/`spiffe_x509`), or troubleshooting 401/403 / `MapInboundClaims` / `IIntrospectionCache not found` errors.
 license: MIT
 ---
 
@@ -100,8 +100,8 @@ All hang off `AuthenticationBuilder` (the return of `AddAuthentication(...)`) an
 | `EnableCaching` | `bool` = `false` | Read/write introspection results through a registered `IIntrospectionCache`. |
 | `CacheDuration` | `TimeSpan` = 5 min | Max cache TTL. |
 | `CacheKeyPrefix` | `string` = `""` | Prefix on every generated cache key. |
-| `ValidateCertificateBinding` | `Func<HttpContext,bool>` = `_ => false` | Per-request predicate; `true` enforces mTLS cert binding. |
-| `CertificateRetriever` | `Func<HttpContext,Task<X509Certificate2?>>` | How the client cert is obtained (default `Connection.GetClientCertificateAsync()`). |
+| `ValidateCertificateBinding` | `CertificateBindingValidation` = `WhenPresent` | Certificate-binding mode (an **enum** as of 0.1.5 — it was a `Func<HttpContext,bool>` defaulting to `_ => false`). `WhenPresent` (default) validates only when the token's `cnf` claim carries an `x5t#S256` member; `Required` always validates, rejecting tokens with no `cnf`; `DangerouslyIgnore` never validates. An undefined enum value throws `ArgumentException` at post-configure. |
+| `CertificateRetriever` | `Func<HttpContext,Task<X509Certificate2?>>` | How the client cert is obtained (default `Connection.GetClientCertificateAsync()`). Invoked only when the mode gate actually validates; return `null` when no cert is present. A throw is a **binding verdict** — 401 `invalid_token`, `Client certificate is malformed` (0.1.5). |
 | `Events` | `MonoCloudAuthenticationEvents` (`: JwtBearerEvents`) | Event hooks (see [Events](#events)). |
 | `SaveToken` (inherited) | `bool` = **`true`** | Store the raw access token as an `AuthenticationToken` named `"access_token"`. |
 | `MapInboundClaims` (inherited) | `bool` = **`true`** | Maps JWT claim types to legacy WS-* URIs on the JWT path (see [Accessing the user](#accessing-the-authenticated-user)). |
@@ -255,10 +255,20 @@ A Redis adapter is identical — `GetAsync` reads the string, `SetAsync` writes 
 
 ## mTLS certificate-bound tokens
 
-Enforce RFC 8705 sender-constrained tokens (`cnf` / `x5t#S256`) per-request via `ValidateCertificateBinding`:
+RFC 8705 sender-constrained tokens (`cnf` / `x5t#S256`) are validated according to `options.ValidateCertificateBinding`, a `CertificateBindingValidation` **enum** (as of **0.1.5** — it was a `Func<HttpContext, bool>` through 0.1.4). The mode is set once on the options; it is not a per-request predicate.
+
+| `CertificateBindingValidation` | Behavior |
+| --- | --- |
+| `WhenPresent` (**default**) | Validates only when the token's `cnf` (confirmation) claim carries an `x5t#S256` thumbprint member. A `cnf` confirming by another method (e.g. DPoP's `jkt`) is skipped; an unparseable `cnf` still validates and fails. |
+| `Required` | Always validates, rejecting a token that carries no `cnf` claim. |
+| `DangerouslyIgnore` | Never validates, even when the token carries a `cnf` claim. |
+
+**Migrating from 0.1.4.** The default now changes behavior: `cnf`-bearing tokens are validated out of the box (previously the default never validated). Replace `ValidateCertificateBinding = _ => true` with `CertificateBindingValidation.Required`, and use `CertificateBindingValidation.DangerouslyIgnore` to opt out entirely. Any delegate assignment no longer compiles.
 
 ```csharp
-options.ValidateCertificateBinding = ctx => ctx.Request.Path.StartsWithSegments("/api/secure");
+options.ValidateCertificateBinding = CertificateBindingValidation.Required;          // also reject tokens with no cnf
+// options.ValidateCertificateBinding = CertificateBindingValidation.DangerouslyIgnore; // opt out entirely
+
 // CertificateRetriever defaults to ctx.Connection.GetClientCertificateAsync();
 // override it if the cert arrives via a header from a TLS-terminating proxy:
 options.CertificateRetriever = async ctx =>
@@ -268,7 +278,7 @@ options.CertificateRetriever = async ctx =>
 };
 ```
 
-When the predicate returns `true`, the presented client cert's base64url SHA-256 thumbprint is compared (constant-time) against the token's `cnf.x5t#S256` on **all three** validation routes (local JWT, live introspection, cached introspection). On success `OnCertificateBindingValidated` fires. Note that cert-**binding** (validating the caller's token) is independent of mTLS client-**auth** (`TlsAuth`, how the API authenticates itself to the introspection endpoint).
+When the mode gate decides to validate, the presented client cert's base64url SHA-256 thumbprint is compared (constant-time) against the token's `cnf.x5t#S256` on **all three** validation routes (local JWT, live introspection, cached introspection). `CertificateRetriever` is invoked — and `OnCertificateBindingValidated` fires on success — only when validation actually runs. A `CertificateRetriever` that **throws** is treated as a binding verdict: a 401 `invalid_token` challenge carrying `Client certificate is malformed` (0.1.5; it previously surfaced as a 500). An undefined enum value throws `ArgumentException` during post-configuration. Note that cert-**binding** (validating the caller's token) is independent of mTLS client-**auth** (`TlsAuth`, how the API authenticates itself to the introspection endpoint).
 
 ## Events
 
@@ -280,7 +290,7 @@ When the predicate returns `true`, the presented client cert's base64url SHA-256
 | --- | --- |
 | `OnMessageReceived` | First, before the token is read from the `Authorization` header. Set `context.Token` to supply it yourself, or `context.Result` to short-circuit. |
 | `OnTokenValidated` | After validation + principal built, on **both** paths. `context` is the framework `TokenValidatedContext`; `context.SecurityToken` holds the parsed JWT on the JWT path and is **`null` on the opaque path** — read claims off `context.Principal`. |
-| `OnAuthenticationFailed` | On any failure — JWT validation error, introspection **infrastructure** failure, inactive token, cert-binding failure. `context.Exception` carries the error. As of 0.1.4 token verdicts (`active:false`, cert-binding) yield a **401**, but introspection infrastructure failures (and exceptions thrown by opaque-path handlers) **rethrow → HTTP 500** unless you set `context.Result`. |
+| `OnAuthenticationFailed` | On any failure — JWT validation error, introspection **infrastructure** failure, inactive token, cert-binding failure. `context.Exception` carries the error. As of 0.1.4 token verdicts (`active:false`, cert-binding — and, as of 0.1.5, a `CertificateRetriever` that throws, reported as `Client certificate is malformed`) yield a **401**, but introspection infrastructure failures (and exceptions thrown by opaque-path handlers) **rethrow → HTTP 500** unless you set `context.Result`. |
 | `OnChallenge` | Before the 401 `WWW-Authenticate` challenge is written. |
 | `OnForbidden` | On a 403. |
 
@@ -290,7 +300,7 @@ When the predicate returns `true`, the presented client cert's base64url SHA-256
 | --- | --- |
 | `OnIntrospection` | Opaque path, just before the introspection HTTP request is sent. Mutate `context.IntrospectionRequest`. |
 | `OnCreatingJwtAssertion` | Inside `JwtAssertionAuth` before the assertion is built. Set `context.JwtAssertion` to fully override it. |
-| `OnCertificateBindingValidated` | After the client cert thumbprint matches `cnf.x5t#S256`. |
+| `OnCertificateBindingValidated` | After the client cert thumbprint matches `cnf.x5t#S256`. Raised only when `ValidateCertificateBinding` actually runs validation — never under `DangerouslyIgnore`, nor under `WhenPresent` for a token with no `x5t#S256`. |
 
 ```csharp
 options.Events = new MonoCloudAuthenticationEvents
@@ -373,6 +383,7 @@ The cache key includes the scheme name, so schemes never share cached claims for
 8. **`UseAuthentication()`/`UseAuthorization()` order or omission.** Both are required, `UseAuthentication()` first, both after routing — otherwise `[Authorize]` yields 401/403 even for valid tokens.
 9. **`TlsAuth`/`SpiffeX509Auth` without mTLS aliases.** The discovery doc must expose `mtls_endpoint_aliases.introspection_endpoint` (or a trust-store entry) or you get `InvalidOperationException`; without an explicit cert you must attach it to `options.HttpClient`'s handler.
 10. **`TokenValidatedContext.SecurityToken` is `null` on the opaque path.** The event now uses the framework `TokenValidatedContext`; `SecurityToken` holds the parsed JWT on the JWT path but is `null` for introspected (opaque) tokens — read claims off `context.Principal` instead of casting a `Token`.
+11. **Assuming certificate binding is still off by default.** As of **0.1.5** `ValidateCertificateBinding` is a `CertificateBindingValidation` enum defaulting to `WhenPresent`, so any token whose `cnf` claim carries an `x5t#S256` thumbprint is now validated — a caller without a matching client certificate gets a 401. Set `CertificateBindingValidation.DangerouslyIgnore` to opt out, `Required` to also reject unbound tokens. Delegate assignments (`_ => true` / `_ => false`) no longer compile.
 
 ## Onboarding checklist
 

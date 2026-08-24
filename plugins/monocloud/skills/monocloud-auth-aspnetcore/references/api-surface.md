@@ -1,6 +1,6 @@
 # `MonoCloud.Authentication.Api` — API surface
 
-Exhaustive type-by-type surface for the `MonoCloud.Authentication.Api` NuGet package — the MonoCloud **ASP.NET Core authentication handler** for validating access tokens on APIs / resource servers. Verified against `MonoCloud.Authentication.Api/` (source) and `README.nuget.md` on **`MonoCloud.Authentication.Api@0.1.4`** (repo `monocloud/api-authentication-dotnet`, tag `v0.1.4`, clean tree). Signatures are listed **verbatim** from source, including default parameter values. IDE intellisense (go-to-definition) is the source of truth for members not listed here.
+Exhaustive type-by-type surface for the `MonoCloud.Authentication.Api` NuGet package — the MonoCloud **ASP.NET Core authentication handler** for validating access tokens on APIs / resource servers. Verified against `MonoCloud.Authentication.Api/` (source) and `README.nuget.md` on **`MonoCloud.Authentication.Api@0.1.5`** (repo `monocloud/api-authentication-dotnet`, tag `v0.1.5`, clean tree). Signatures are listed **verbatim** from source, including default parameter values. IDE intellisense (go-to-definition) is the source of truth for members not listed here.
 
 This is a standard ASP.NET Core authentication handler (built on `Microsoft.AspNetCore.Authentication.JwtBearer`) that plugs into `AddAuthentication()`, `[Authorize]`, and the authorization **policy system**. It is **not** a middleware you write, **not** a management client, and it has **no** `protectApi` factory (that is the Node express/fastify SDK — a different skill). See [What this SDK does NOT have](#what-this-sdk-does-not-have).
 
@@ -27,7 +27,7 @@ Implicit usings are **off** in this package, so consumer files import explicitly
 
 | Namespace | Public types |
 |---|---|
-| `MonoCloud.Authentication.Api` | `MonoCloudAuthenticationExtension`, `MonoCloudAuthenticationDefaults`, `MonoCloudAuthenticationOptions`, `MonoCloudAuthenticationEvents`, `MonoCloudAuthenticationHandler`, `PostConfigureMonoCloudAuthenticationOptions`, `PostConfigureMonoCloudAuthenticationTimeProvider` |
+| `MonoCloud.Authentication.Api` | `MonoCloudAuthenticationExtension`, `MonoCloudAuthenticationDefaults`, `MonoCloudAuthenticationOptions`, `MonoCloudAuthenticationEvents`, `MonoCloudAuthenticationHandler`, `CertificateBindingValidation` (enum, new in 0.1.5), `PostConfigureMonoCloudAuthenticationOptions`, `PostConfigureMonoCloudAuthenticationTimeProvider` |
 | `MonoCloud.Authentication.Api.Shared` | `IIntrospectionCache`, `JwtAssertion` |
 | `MonoCloud.Authentication.Api.Shared.ClientAuth` | `IMonoCloudClientAuth`, `ClientSecretAuth`, `JwtAssertionAuth`, `TlsAuth`, `SpiffeJwtAuth`, `SpiffeX509Auth`, `ClientAuthenticationContext` |
 | `MonoCloud.Authentication.Api.Shared.Context` | `IntrospectionRequestContext`, `JwtAssertionContext`, `CertificateBindingValidatedContext` (MessageReceived/TokenValidated/AuthenticationFailed contexts are now the framework's JwtBearer types) |
@@ -148,8 +148,21 @@ Derives from `JwtBearerOptions`, so the **entire `AddJwtBearer` surface is inher
 
 ### Certificate binding (mTLS-bound tokens, RFC 8705)
 
-- `Func<HttpContext, bool> ValidateCertificateBinding { get; set; }` — default `_ => false`. Per-request predicate; when it returns `true` the handler enforces `cnf`/`x5t#S256` certificate-binding (on the JWT path, the live introspection path, and the cached introspection path). Default disables cert binding.
-- `Func<HttpContext, Task<X509Certificate2?>> CertificateRetriever { get; set; }` — default `async context => await context.Connection.GetClientCertificateAsync()`. How the presented client cert is obtained for binding validation.
+- `CertificateBindingValidation ValidateCertificateBinding { get; set; }` — default `CertificateBindingValidation.WhenPresent` (it was a `Func<HttpContext, bool>` defaulting to `_ => false` through 0.1.4). Controls `cnf`/`x5t#S256` enforcement on all three routes (JWT path, live introspection path, cached introspection path). An undefined enum value throws `ArgumentException` in post-configuration.
+
+  ```csharp
+  namespace MonoCloud.Authentication.Api;
+
+  public enum CertificateBindingValidation
+  {
+      WhenPresent,        // default — validate only when the token's cnf claim carries an x5t#S256 thumbprint member
+      Required,           // always validate, rejecting tokens without a cnf claim
+      DangerouslyIgnore   // never validate, even when the token carries a cnf claim
+  }
+  ```
+
+  Under `WhenPresent` a `cnf` confirming by another method (e.g. DPoP's `jkt`) is skipped, while an unparseable `cnf` or a non-string thumbprint still validates and then fails.
+- `Func<HttpContext, Task<X509Certificate2?>> CertificateRetriever { get; set; }` — default `async context => await context.Connection.GetClientCertificateAsync()`. How the presented client cert is obtained for binding validation; invoked **only** when the mode gate actually validates. Return `null` when no client certificate is present. An exception thrown here is treated as a certificate-binding **verdict** — a 401 `invalid_token` challenge carrying `Client certificate is malformed` (0.1.5; previously it surfaced as a 500) — not an infrastructure error.
 
 ### Client-assertion JWT (for `JwtAssertionAuth`)
 
@@ -267,10 +280,10 @@ Derives from `JwtBearerEvents`, so the **standard bearer events are inherited** 
 |---|---|---|
 | `OnMessageReceived` / `MessageReceived` | First in `HandleAuthenticateAsync`, before the token is read from the `Authorization` header. Set `context.Token`/`context.Result`. | `MessageReceivedContext` (JwtBearer) |
 | `OnTokenValidated` / `TokenValidated` | After the `ClaimsPrincipal` is built, on **both** paths. Set `context.Result` to override. | `TokenValidatedContext` (JwtBearer) — `context.SecurityToken` is the parsed JWT on the JWT path, **`null` on the opaque path** |
-| `OnAuthenticationFailed` / `AuthenticationFailed` | On any failure — JWT validation error, introspection infrastructure failure, inactive token, cert-binding failure. `context.Exception` carries the error. As of 0.1.4 token verdicts (`active:false`, cert-binding) yield a **401**; introspection infrastructure failures (and exceptions from opaque-path handlers) **rethrow → HTTP 500** unless `context.Result` is set. | `AuthenticationFailedContext` (JwtBearer) |
+| `OnAuthenticationFailed` / `AuthenticationFailed` | On any failure — JWT validation error, introspection infrastructure failure, inactive token, cert-binding failure. `context.Exception` carries the error. As of 0.1.4 token verdicts (`active:false`, cert-binding — including, as of 0.1.5, a `CertificateRetriever` that throws, surfaced as `Client certificate is malformed`) yield a **401**; introspection infrastructure failures (and exceptions from opaque-path handlers) **rethrow → HTTP 500** unless `context.Result` is set. | `AuthenticationFailedContext` (JwtBearer) |
 | `OnChallenge` / `Challenge` | Before the 401 `WWW-Authenticate` challenge is written. | `JwtBearerChallengeContext` (JwtBearer) |
 | `OnForbidden` / `Forbidden` | On a 403. | `ForbiddenContext` (JwtBearer) |
-| `OnCertificateBindingValidated` / `CertificateBindingValidated` | After the presented cert's SHA-256 thumbprint matches the token's `cnf.x5t#S256`. If `context.Result` is set it is returned. | `CertificateBindingValidatedContext` (MonoCloud) — none |
+| `OnCertificateBindingValidated` / `CertificateBindingValidated` | After the presented cert's SHA-256 thumbprint matches the token's `cnf.x5t#S256`. Raised **only when `ValidateCertificateBinding` actually runs validation** — never under `DangerouslyIgnore`, nor under `WhenPresent` for a token with no `x5t#S256`. If `context.Result` is set it is returned. | `CertificateBindingValidatedContext` (MonoCloud) — none |
 | `OnIntrospection` / `Introspection` | On the opaque path, just before the HTTP introspection request is sent. Mutate/replace `context.IntrospectionRequest`. | `IntrospectionRequestContext` (MonoCloud) — `HttpRequestMessage IntrospectionRequest` |
 | `OnCreatingJwtAssertion` / `CreatingJwtAssertion` | Inside `JwtAssertionAuth`, before building the client-assertion JWT. Set `context.JwtAssertion` to fully supply/override it. | `JwtAssertionContext` (MonoCloud) — `JwtAssertion? JwtAssertion` |
 
@@ -386,7 +399,7 @@ Returned/overridden via the [`CreatingJwtAssertion`](#monocloudauthenticationeve
 ## Other public types
 
 - `MonoCloudAuthenticationHandler : JwtBearerHandler` — the scheme handler. Public, but registered by the extension — never constructed by consumers. It raises `MessageReceived` once, reads the bearer token (returns `NoResult()` if none), then routes: JWT tokens are delegated to `base.HandleAuthenticateAsync()` (with an internal `InterceptingEvents` wrapper that runs group normalization + cert binding before the consumer's `TokenValidated`), opaque tokens go through RFC 7662 introspection.
-- `PostConfigureMonoCloudAuthenticationOptions : IPostConfigureOptions<MonoCloudAuthenticationOptions>` — public; registered as a singleton by the extension. `https://`-prefixes a scheme-less `Authority`, assigns `HttpClient` → `Backchannel`, maps `AuthenticationType`/`NameClaimType`/`RoleClaimType`/`ClockSkew` onto `TokenValidationParameters`, enforces the cache-singleton rule, then calls the framework's `JwtBearerPostConfigureOptions` (which copies `Audience` → `ValidAudience` and builds the `ConfigurationManager`).
+- `PostConfigureMonoCloudAuthenticationOptions : IPostConfigureOptions<MonoCloudAuthenticationOptions>` — public; registered as a singleton by the extension. `https://`-prefixes a scheme-less `Authority`, assigns `HttpClient` → `Backchannel`, maps `AuthenticationType`/`NameClaimType`/`RoleClaimType`/`ClockSkew` onto `TokenValidationParameters`, enforces the cache-singleton rule, rejects an undefined `ValidateCertificateBinding` value with `ArgumentException("ValidateCertificateBinding must be a defined CertificateBindingValidation value")` (new in 0.1.5 — an out-of-range enum would otherwise silently skip binding at request time), then calls the framework's `JwtBearerPostConfigureOptions` (which copies `Audience` → `ValidAudience` and builds the `ConfigurationManager`).
 - `PostConfigureMonoCloudAuthenticationTimeProvider : IPostConfigureOptions<MonoCloudAuthenticationOptions>` — public; second singleton registered by the extension (replica of the framework's private TimeProvider post-configure).
 
 > **Internal (not public API — do not reference):** `IntrospectionResult` (parses RFC 7662 JSON → claims + `IsActive`), `Utils` (`CacheKeyGenerator`, `NormalizeGroupClaims`, exp/TTL), `ClaimConverter`, `MtlsEndpointAliases`, and `MonoCloudAuthenticationOptions.SchemeName`.
@@ -478,7 +491,7 @@ public class WeatherController : ControllerBase
 | `RefreshOnIssuerKeyNotFound` (inherited) | **`true`** | Re-fetches keys on unknown `kid` |
 | `JwtAssertionDuration` | `TimeSpan.FromMinutes(5)` | Client-assertion JWT `exp` |
 | `JwtAssertionSigningAlgorithm` | `null` | HS256 for symmetric, RS256 otherwise |
-| `ValidateCertificateBinding` | `_ => false` | Cert binding off by default |
+| `ValidateCertificateBinding` | `CertificateBindingValidation.WhenPresent` | Enum since 0.1.5; tokens whose `cnf` carries an `x5t#S256` are validated by default |
 | `CertificateRetriever` | `ctx => ctx.Connection.GetClientCertificateAsync()` | |
 | `AutomaticRefreshInterval` | `ConfigurationManager<…>.DefaultAutomaticRefreshInterval` (12 h) | Discovery refresh |
 | `RefreshInterval` | `ConfigurationManager<…>.DefaultRefreshInterval` (30 s) | Discovery refresh |
@@ -496,6 +509,7 @@ public class WeatherController : ControllerBase
 - **Provide the tenant root, not the discovery URL.** `Authority` is auto-prefixed with `https://`; discovery is `Authority + "/.well-known/openid-configuration"`.
 - **`Audience` only feeds `ValidAudience` if it is empty** — setting `TokenValidationParameters.ValidAudience`/`ValidAudiences` directly overrides `Audience`.
 - **`TlsAuth`/`SpiffeX509Auth` require the discovery doc to expose `mtls_endpoint_aliases.introspection_endpoint`** (or a trust-store-specific `mtls_additional_endpoint_aliases` entry); otherwise `InvalidOperationException`. A `TlsAuth` with an explicit `Certificate` makes post-configure build a dedicated `HttpClient`; without one, attach the cert to `options.HttpClient`'s handler yourself.
+- **Certificate binding validates `cnf`-bearing tokens by default as of 0.1.5.** `ValidateCertificateBinding` is a `CertificateBindingValidation` enum (was `Func<HttpContext, bool>` = `_ => false`); the default `WhenPresent` validates whenever the token's `cnf` carries an `x5t#S256`, so a bound token presented without a matching client certificate now 401s. Use `Required` to also reject unbound tokens, `DangerouslyIgnore` to opt out entirely, and note that a `CertificateRetriever` which throws is a **verdict** (401, `Client certificate is malformed`), not an infrastructure 500.
 - **`TokenValidatedContext.SecurityToken` is `null` on the opaque path** (there is no parsed token for an introspected credential) — read claims off `context.Principal`, not a `Token` cast.
 - **`MessageReceivedContext`/`TokenValidatedContext`/`AuthenticationFailedContext` are the framework's JwtBearer types**, not MonoCloud's; only `IntrospectionRequestContext`/`JwtAssertionContext`/`CertificateBindingValidatedContext` live in `MonoCloud.Authentication.Api.Shared.Context`.
 

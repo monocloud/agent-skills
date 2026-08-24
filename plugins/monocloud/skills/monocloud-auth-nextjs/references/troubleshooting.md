@@ -44,7 +44,7 @@ If you've narrowed the matcher, ensure the path mapped by `MONOCLOUD_AUTH_USER_I
 
 ## `protect()` / `redirectToSignIn()` throws "App Router only"
 
-**Symptom:** Server-side error: "`protect()` can only be used in App Router server context."
+**Symptom:** Server-side error: `protect() can only be used in App Router server environments (RSC, route handlers, or server actions)` (same wording for `redirectToSignIn()` / `redirectToSignOut()`).
 
 **Cause:** Called from a Pages Router file (`pages/...`) or from a client component.
 
@@ -64,7 +64,7 @@ If you've narrowed the matcher, ensure the path mapped by `MONOCLOUD_AUTH_USER_I
 
 **Symptom:** Build error: "useAuth must be used in a Client Component" or similar.
 
-**Cause:** Both helpers require `"use client"`. They depend on React Context.
+**Cause:** Both helpers require `"use client"`. `useAuth()` is a React hook built on SWR (`useSWR`) and `<Protected>` calls it internally — hooks only run in Client Components. Neither needs a provider or wrapper.
 
 **Fix:** Use `getSession()` for server-side conditional rendering. Reserve `<Protected>` and `useAuth()` for components that have `"use client"` at the top.
 
@@ -123,7 +123,21 @@ MONOCLOUD_AUTH_SESSION_SLIDING=true
 MONOCLOUD_AUTH_USE_PAR=false
 ```
 
-This applies to every `MONOCLOUD_AUTH_*` boolean option: `USE_PAR`, `FEDERATED_SIGNOUT`, `ALLOW_QUERY_PARAM_OVERRIDES`, `FETCH_USER_INFO`, `REFETCH_USER_INFO`, `SESSION_SLIDING`, and the cookie flags (`SESSION_COOKIE_HTTP_ONLY`, `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_PERSISTENT`, `STATE_COOKIE_SECURE`).
+This applies to every `MONOCLOUD_AUTH_*` boolean option: `USE_PAR`, `FEDERATED_SIGNOUT`, `ALLOW_QUERY_PARAM_OVERRIDES`, `FETCH_USER_INFO`, `REFETCH_USER_INFO`, `REFETCH_STRICT_PROFILE_SYNC`, `SESSION_SLIDING`, and the cookie flags (`SESSION_COOKIE_HTTP_ONLY`, `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_PERSISTENT`, `STATE_COOKIE_SECURE`).
+
+## Requests to MonoCloud fail with "timed out after 10000ms"
+
+**Symptom:** Sign-in, callback, `useAuth()`, or `getTokens()` fails with a `MonoCloudHttpError` reading `Request to https://<tenant>/... timed out after 10000ms`. Slow networks or an egress proxy usually trip it on the very first call (discovery / JWKS).
+
+**Cause:** Every request the SDK makes to the authorization server — `/.well-known/openid-configuration`, the JWKS URI, token, userinfo, PAR, and revocation — is aborted via `AbortController` after `responseTimeout` milliseconds, which defaults to **10000**. As of `@monocloud/auth-nextjs@0.2.8` the option and its env var actually take effect; in earlier versions they were resolved and then ignored, so upgrading can surface timeouts that were previously unbounded.
+
+**Fix:** Raise it — the validator rejects anything below `1000` ms:
+
+```
+MONOCLOUD_AUTH_RESPONSE_TIMEOUT=20000
+```
+
+…or pass it in code: `new MonoCloudNextClient({ responseTimeout: 20000 })`. The env value is parsed with `parseInt`, so a non-numeric string is silently discarded and the `10000` default applies.
 
 ## `getTokens()` in a Server Component silently no-ops the session write
 

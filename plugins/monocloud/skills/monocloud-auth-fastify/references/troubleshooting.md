@@ -115,11 +115,37 @@ fastify.get('/b', { onRequest: protect({ scopes: ['x'] }) }, ...);
 
 ## mTLS certificate-binding errors
 
-**Symptom:** Tokens that work in other clients fail with `401 { "message": "unauthorized" }` (`WWW-Authenticate: Bearer error="invalid_token"`). The underlying `MonoCloudTokenError` message is `The certificate hash in the access token does not match the presented client certificate (certificate binding validation failed)` — or `Client certificate is not present` when `validateCertificateBinding: true` is set but no `certificateResolver` is wired. There is no `mtls_binding_mismatch` code; every binding failure is a plain `MonoCloudTokenError` with `code: 'invalid_token'`.
+**Symptom:** Tokens that work in other clients fail with `401 { "message": "unauthorized" }` (`WWW-Authenticate: Bearer error="invalid_token"`). The underlying `MonoCloudTokenError` message is `The certificate hash in the access token does not match the presented client certificate (certificate binding validation failed)` — or `Client certificate is not present` when binding validation runs but no `certificateResolver` is wired. There is no `mtls_binding_mismatch` code; every binding failure is a plain `MonoCloudTokenError` with `code: 'invalid_token'`.
 
 **Cause:** The token was issued with a `cnf` confirmation claim binding it to a specific client certificate. The cert presented to this API doesn't match.
 
-**Fix:** Terminate TLS with client-cert forwarding (nginx, ALB, etc.) and route the cert into Fastify so the SDK can compare its SHA-256 thumbprint to `cnf.x5t#S256`. If you don't issue mTLS-bound tokens, this error shouldn't appear — verify the issuing client config.
+**Fix:** Terminate TLS with client-cert forwarding (nginx, ALB, etc.) and route the cert into Fastify via `certificateResolver` so the SDK can compare its SHA-256 thumbprint to `cnf.x5t#S256`. If you don't issue mTLS-bound tokens, this error shouldn't appear — verify the issuing client config.
+
+**Binding is now client-level, and on by default.** `validateCertificateBinding` moved off `protect(...)` onto the client (env `MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING`) and is a union, not a boolean:
+
+| Mode | Behaviour |
+| ---- | --------- |
+| `when_present` (default) | Validates only when the token's `cnf` claim carries an `x5t#S256` thumbprint. |
+| `required` | Always validates — a token **without** a `cnf` claim is rejected with `Access token does not contain a 'cnf' (confirmation) claim for certificate binding`. |
+| `dangerously_ignore` | Never validates, even when the token carries a `cnf` claim. |
+
+So a certificate-bound token that previously sailed through an unflagged route now fails with `Client certificate is not present` until a `certificateResolver` is wired. `protect({ validateCertificateBinding: true })` is a TypeScript error — delete it and set the mode on the client (or via `MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING`).
+
+## Opaque token 401s with `inactive_token`
+
+**Symptom:** An opaque (or force-introspected) token returns `401 { "message": "unauthorized" }`. The thrown error is `MonoCloudTokenError` with `code: 'inactive_token'` and message `Token is not active. The introspection endpoint returned active=false`.
+
+**Cause:** The introspection endpoint reported `active: false` — the token was revoked, expired server-side, or was issued to a different client/audience.
+
+**Fix:** Re-issue the token. Note the verdict is cached: with an `IIntrospectionCache` wired, an `{ active: false }` entry is stored for `MONOCLOUD_BACKEND_INTROSPECTION_CACHE_DURATION` seconds (default 300), so requests keep 401ing straight from cache (message `Token is not active. A cached introspection result reported active=false`) until the entry lapses. Lower the duration, set it to `0` to disable introspection caching, or `delete(token)` from your cache implementation.
+
+## Requests hang, then 503 after ~10 seconds
+
+**Symptom:** Against a slow or unreachable tenant, requests stall for about ten seconds and return `503 { "message": "service unavailable" }`. The underlying error is `MonoCloudHttpError: Request to <url> timed out after 10000ms`.
+
+**Cause:** `responseTimeout` (env `MONOCLOUD_BACKEND_RESPONSE_TIMEOUT`, default `10000` ms) bounds the discovery, JWKS and introspection requests made while validating an access token. On elapse the request is aborted and the resulting `MonoCloudHttpError` carries no HTTP status, so `mapProtectError` returns 503.
+
+**Fix:** Tune `MONOCLOUD_BACKEND_RESPONSE_TIMEOUT` to your latency budget. The minimum accepted value is `1000`; anything lower throws `MonoCloudValidationError` at startup.
 
 ## Boolean env vars silently ignored
 
@@ -136,7 +162,7 @@ MONOCLOUD_BACKEND_INTROSPECT_JWT_TOKENS=true
 
 ## `MonoCloudValidationError` thrown at startup
 
-**Symptom:** The process dies as soon as `protectApi()` (or `new MonoCloudBackendNodeClient()`) runs, with a `MonoCloudValidationError` such as `"tenantDomain" is required`, `"audience" is required`, or `"audience" must be a valid uri` — no request is ever served.
+**Symptom:** The process dies as soon as `protectApi()` (or `new MonoCloudBackendNodeClient()`) runs, with a `MonoCloudValidationError` such as `"tenantDomain" is required`, `"audience" is required`, `"audience" must be a valid uri`, `"validateCertificateBinding" must be one of [when_present, required, dangerously_ignore]`, or `"responseTimeout" must be greater than or equal to 1000` — no request is ever served.
 
 **Cause:** `protectApi()` constructs the client eagerly and options are validated immediately. `tenantDomain` and `audience` are both **required** and must be absolute URIs; a missing or non-URL value throws instead of degrading to a per-request 500.
 

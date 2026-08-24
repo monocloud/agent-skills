@@ -386,7 +386,7 @@ type OnSessionCreating = (
 ) => Promise<void> | void;
 ```
 
-Fires every time the SDK is about to persist a new or updated session — after sign-in callback processing, after `refreshSession`, after `refetchUserInfo`, and on silent sign-in. Mutate `session` in place to attach app-specific data.
+Fires every time the SDK is about to persist a new or updated session — after sign-in callback processing, after `refreshSession`, after `refetchUserInfo`, after the auto-refresh inside `getTokens()`, and on silent sign-in. Mutate `session` in place to attach app-specific data.
 
 ## Errors
 
@@ -406,7 +406,10 @@ class MonoCloudOPError extends MonoCloudAuthBaseError {
 
 class MonoCloudValidationError extends MonoCloudAuthBaseError {}
 class MonoCloudTokenError      extends MonoCloudAuthBaseError {
-  readonly code: 'invalid_token' | 'insufficient_scope' | 'insufficient_groups';
+  // Browser flows only ever produce 'invalid_token' (ID-token / UserInfo failures) and
+  // 'insufficient_scope' (UserInfo WWW-Authenticate). 'inactive_token' and 'insufficient_groups'
+  // come from server-side introspection / API protection and are never raised by this package.
+  readonly code: 'invalid_token' | 'inactive_token' | 'insufficient_scope' | 'insufficient_groups';
 }
 class MonoCloudHttpError       extends MonoCloudAuthBaseError {
   get status(): number | undefined;     // from `raw`; undefined on a network failure

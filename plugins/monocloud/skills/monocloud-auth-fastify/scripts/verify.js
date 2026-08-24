@@ -69,6 +69,29 @@ if (introspectAll) {
   }
 }
 
+const CERT_BINDING_MODES = ['when_present', 'required', 'dangerously_ignore'];
+const certBinding = String(process.env.MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING || env.MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING || '').trim();
+if (!certBinding) {
+  pass('MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING unset — defaults to "when_present": tokens carrying a cnf/x5t#S256 thumbprint ARE validated, so wire a certificateResolver.');
+} else if (CERT_BINDING_MODES.includes(certBinding)) {
+  pass(`MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING=${certBinding}`);
+} else {
+  fail(`MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING must be one of ${CERT_BINDING_MODES.join(', ')} — any other value throws MonoCloudValidationError at startup.`);
+}
+
+const responseTimeout = parseInt(String(process.env.MONOCLOUD_BACKEND_RESPONSE_TIMEOUT || env.MONOCLOUD_BACKEND_RESPONSE_TIMEOUT || '').trim(), 10);
+if (!Number.isNaN(responseTimeout)) {
+  if (responseTimeout < 1000) fail('MONOCLOUD_BACKEND_RESPONSE_TIMEOUT must be >= 1000 (milliseconds) — smaller values throw MonoCloudValidationError at startup.');
+  else pass(`MONOCLOUD_BACKEND_RESPONSE_TIMEOUT set (${responseTimeout}ms)`);
+}
+
+const introspectionCacheDuration = parseInt(String(process.env.MONOCLOUD_BACKEND_INTROSPECTION_CACHE_DURATION || env.MONOCLOUD_BACKEND_INTROSPECTION_CACHE_DURATION || '').trim(), 10);
+if (!Number.isNaN(introspectionCacheDuration)) {
+  if (introspectionCacheDuration < 0) fail('MONOCLOUD_BACKEND_INTROSPECTION_CACHE_DURATION must be >= 0 — negative values throw MonoCloudValidationError at startup.');
+  else if (introspectionCacheDuration === 0) warn('MONOCLOUD_BACKEND_INTROSPECTION_CACHE_DURATION=0 — introspection caching is disabled; every opaque token hits the introspection endpoint.');
+  else pass(`MONOCLOUD_BACKEND_INTROSPECTION_CACHE_DURATION set (${introspectionCacheDuration}s)`);
+}
+
 const tag = { pass: 'PASS', warn: 'WARN', fail: 'FAIL' };
 for (const [k, m] of findings) console.log(`[${tag[k]}] ${m}`);
 const failed = findings.filter(([k]) => k === 'fail').length;

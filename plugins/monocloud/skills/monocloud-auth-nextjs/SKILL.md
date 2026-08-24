@@ -53,6 +53,7 @@ Optional:
 | `MONOCLOUD_AUTH_SIGNOUT_URL`   | `/api/auth/signout`    |                                    |
 | `MONOCLOUD_AUTH_USER_INFO_URL` | `/api/auth/userinfo`   |                                    |
 | `MONOCLOUD_AUTH_BACK_CHANNEL_LOGOUT_URL` | `/api/auth/backchannel-logout` | Back-channel logout route (no `NEXT_PUBLIC_` mirror needed) |
+| `MONOCLOUD_AUTH_RESPONSE_TIMEOUT` | `10000` | Timeout in **milliseconds** for every request the SDK makes to MonoCloud (discovery, JWKS, token, userinfo). Minimum `1000`. Takes effect from `@monocloud/auth-nextjs@0.2.8` |
 
 If you override a route (e.g. `MONOCLOUD_AUTH_SIGNIN_URL`), also set the matching `NEXT_PUBLIC_MONOCLOUD_AUTH_SIGNIN_URL` so client-side helpers (`useAuth`, `<SignIn>`, `<SignOut>`, etc.) discover it, AND update the redirect URI in the MonoCloud dashboard.
 

@@ -6,7 +6,7 @@ Every export available from the Express subpath, verified against `packages/node
 
 The surface most apps actually reach for — full signatures and types follow below.
 
-- `protectApi(options?)` / `protectApi(client, options?)` — returns a `ProtectMiddleware` factory; call it per route with `ProtectOptions` (`scopes`, `groups`, `validateCertificateBinding`).
+- `protectApi(options?)` / `protectApi(client, options?)` — returns a `ProtectMiddleware` factory; call it per route with `ProtectOptions` (`scopes`, `groups`). Certificate binding is configured once on the client (`validateCertificateBinding`), not per route.
 - `AuthenticatedExpressRequest` — cast `req` after `protectApi` to read `req.claims`.
 - `MonoCloudBackendNodeClient` — use when you need a shared instance or call `validateAccessToken` directly.
 - Errors: `MonoCloudTokenError` (→ 401 by default, → 403 when `code` is `insufficient_scope`/`insufficient_groups`), `MonoCloudValidationError` and `MonoCloudOPError` (→ 500), `MonoCloudHttpError` (→ 503 when status is undefined / ≥500 / 429, else 500).
@@ -87,12 +87,14 @@ type ClientCertificateResolver<T> = (req: T) => Promise<string | undefined>;
 Passed to each per-route call of the factory.
 
 ```ts
+// Declared as Omit<ValidateAccessTokenOptions, 'clientCertificate'>
 interface ProtectOptions {
   scopes?: string[];                    // AND — token must carry all
   groups?: string[];                    // OR by default (matchAll flips)
-  validateCertificateBinding?: boolean; // mTLS-bound token check
 }
 ```
+
+That is the whole per-route surface. The client certificate comes from the `certificateResolver` passed to `protectApi()`, and the certificate-binding **mode** comes from the client's `validateCertificateBinding` option — neither can be overridden per route.
 
 ### `MonoCloudBackendNodeClientOptions`
 
@@ -114,9 +116,17 @@ interface MonoCloudBackendNodeClientOptions {
   jwksCacheDuration?: number;          // seconds
   metadataCacheDuration?: number;      // seconds
   introspectJwtTokens?: boolean;       // default false — force introspection for JWTs
+  validateCertificateBinding?: CertificateBindingValidation; // default 'when_present'
+  introspectionCacheDuration?: number; // seconds, default 300 — caps cache entries; 0 disables caching
+  responseTimeout?: number;            // ms, default 10000, min 1000 — aborts discovery/JWKS/introspection requests
   cache?: IIntrospectionCache;          // constructor-only introspection-results cache
   fetcher?: typeof fetch;              // i.e. (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 }
+
+type CertificateBindingValidation =
+  | 'when_present'        // default — validate only when the token's cnf claim carries an x5t#S256 thumbprint
+  | 'required'            // always validate, rejecting tokens without a cnf claim
+  | 'dangerously_ignore'; // never validate, even when the token carries a cnf claim
 
 type ClientAuthMethod =
   | 'client_secret_basic'
@@ -136,17 +146,19 @@ mTLS endpoint aliases (RFC 8705): when `clientAuthMethod` is `tls_client_auth`, 
 Used when calling `client.validateAccessToken()` directly.
 
 ```ts
+// Declared as Omit<IntrospectOptions, 'validateCertificateBinding'>
 interface ValidateAccessTokenOptions {
   scopes?: string[];
   groups?: string[];
-  validateCertificateBinding?: boolean;
   clientCertificate?: string;          // PEM, optionally without BEGIN/END delimiters
 }
 ```
 
+The `Omit` is deliberate: `validateCertificateBinding` cannot be overridden per call on `MonoCloudBackendNodeClient` — the client-level mode is applied to both the JWT and the introspection path. The parent class's own `IntrospectOptions` / `ValidateJwtAccessTokenOptions` do still accept `validateCertificateBinding` per call.
+
 ### `IIntrospectionCache`
 
-Implement for Redis, in-memory, etc. Only introspection results are cached (opaque tokens, and JWTs when `introspectJwtTokens` is `true`); locally-validated JWTs are never cached. The client keys on the raw token string and respects `claims.exp`.
+Implement for Redis, in-memory, etc. Only introspection results are cached (opaque tokens, and JWTs when `introspectJwtTokens` is `true`); locally-validated JWTs are never cached. The client keys on the raw token string and writes each entry with `expiresAt = min(claims.exp, now() + introspectionCacheDuration)` (default `300` s), so no entry outlives `introspectionCacheDuration`. `active: false` verdicts are cached as well (for `introspectionCacheDuration` seconds) and replayed as `MonoCloudTokenError(…, 'inactive_token')` without re-introspecting. When `introspectionCacheDuration` is `0`, the cache is neither read nor written.
 
 ```ts
 interface IIntrospectionCache {
@@ -200,7 +212,9 @@ Key differences vs `MonoCloudBackendNodeClient`:
 
 - `audience` is a **required positional argument**, not a field on the options object.
 - No `MONOCLOUD_BACKEND_*` env-var loading — every option you want must be passed in code.
-- No built-in `cache` (no claims caching helper).
+- No built-in `cache` (no claims caching helper), and therefore no `introspectionCacheDuration`.
+- No `responseTimeout` default: the parent leaves it `undefined` (no abort timer) unless you pass one, whereas `MonoCloudBackendNodeClient` defaults it to `10000` ms.
+- No client-level certificate-binding mode: on the parent, `validateCertificateBinding` is passed **per call** via `IntrospectOptions` / `ValidateJwtAccessTokenOptions` and defaults to `undefined`, which means no binding check at all.
 - `clientAuthMethod` defaults to **`'client_secret_basic'`** (the OIDC spec default), **not** `'client_secret_post'` as it does on `MonoCloudBackendNodeClient`. If you switch from the wrapper to the parent class without re-specifying this, introspection requests change auth method and may start returning 401s from the OP.
 
 If you find yourself reaching for the parent class to "simplify," reconsider — `MonoCloudBackendNodeClient` is the supported path.
@@ -213,7 +227,8 @@ class MonoCloudAuthBaseError extends Error {
 }
 class MonoCloudValidationError extends MonoCloudAuthBaseError {}  // bad config / empty token / introspection not configured
 class MonoCloudTokenError extends MonoCloudAuthBaseError {        // token invalid / missing scopes/groups
-  readonly code: 'invalid_token' | 'insufficient_scope' | 'insufficient_groups';
+  readonly code: MonoCloudTokenErrorCode;
+  // 'invalid_token' | 'inactive_token' | 'insufficient_scope' | 'insufficient_groups' (defaults to 'invalid_token')
 }
 class MonoCloudOPError extends MonoCloudAuthBaseError {           // OP returned an OAuth error
   error: string;                                                   // OAuth `error` code (401 from introspection → 'invalid_client')
@@ -230,7 +245,7 @@ class MonoCloudHttpError extends MonoCloudAuthBaseError {         // network / u
 - `'insufficient_scope'` (message `'Token is missing required scopes'`)
 - `'insufficient_groups'` (message `'Token is missing required groups'`)
 
-Any other `MonoCloudTokenError` (e.g. `code: 'invalid_token'`) becomes 401. The split is by `code`, not by the message string.
+Any other `MonoCloudTokenError` becomes 401 — that includes `code: 'invalid_token'` and `code: 'inactive_token'`, the latter thrown by `introspectAccessToken()` when the authorization server returns `active: false` (message `'Token is not active. The introspection endpoint returned active=false'`) and by the client when it replays a cached `active: false` entry (message `'Token is not active. A cached introspection result reported active=false'`). The split is by `code`, not by the message string.
 
 ## Token-claim types (re-exported from `@monocloud/auth-core`)
 
@@ -256,7 +271,7 @@ interface AccessTokenClaims extends JwtClaims {
 //      MonoCloudTokenErrorCode, MonoCloudRawResponse
 ```
 
-For mTLS / certificate-bound tokens, the `cnf` claim is accessed via the index signature as `claims['cnf']`. The validator checks `cnf['x5t#S256']` against the SHA-256 hash of the presented client certificate when `validateCertificateBinding` is `true`.
+For mTLS / certificate-bound tokens, the `cnf` claim is accessed via the index signature as `claims['cnf']`. The validator checks `cnf['x5t#S256']` against the SHA-256 hash of the presented client certificate according to the client's `validateCertificateBinding` mode: `'when_present'` (the default) runs the check as soon as the token's `cnf` carries an `x5t#S256` thumbprint, `'required'` always runs it and rejects tokens with no `cnf`, and `'dangerously_ignore'` never runs it. A `cnf` that cannot be parsed counts as certificate-bound, so validation runs and rejects it rather than silently skipping a broken claim.
 
 ## Defaults
 
@@ -268,6 +283,9 @@ From `packages/node-backend/src/options/defaults.ts`:
   clockTolerance: 60,
   clientAuthMethod: 'client_secret_post',
   introspectJwtTokens: false,
+  validateCertificateBinding: 'when_present',
+  responseTimeout: 10000,          // milliseconds
+  introspectionCacheDuration: 300, // seconds
 }
 ```
 
@@ -290,6 +308,9 @@ From `packages/node-backend/src/options/defaults.ts`:
 | `MONOCLOUD_BACKEND_JWKS_CACHE_DURATION` | `jwksCacheDuration` | Coerced to number |
 | `MONOCLOUD_BACKEND_METADATA_CACHE_DURATION` | `metadataCacheDuration` | Coerced to number |
 | `MONOCLOUD_BACKEND_INTROSPECT_JWT_TOKENS` | `introspectJwtTokens` | Coerced to boolean |
+| `MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING` | `validateCertificateBinding` | One of `when_present` (default) / `required` / `dangerously_ignore`; any other value fails Joi validation and throws `MonoCloudValidationError` at construction |
+| `MONOCLOUD_BACKEND_INTROSPECTION_CACHE_DURATION` | `introspectionCacheDuration` | Coerced to number (seconds, min `0`); default `300`, `0` disables introspection caching |
+| `MONOCLOUD_BACKEND_RESPONSE_TIMEOUT` | `responseTimeout` | Coerced to number (milliseconds, min `1000`); default `10000` |
 
 Constructor options always win over env vars.
 

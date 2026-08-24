@@ -259,7 +259,11 @@ class MonoCloudOPError extends MonoCloudAuthBaseError {
 
 class MonoCloudValidationError extends MonoCloudAuthBaseError {}
 class MonoCloudTokenError extends MonoCloudAuthBaseError {
-  code: 'invalid_token' | 'insufficient_scope' | 'insufficient_groups';  // default 'invalid_token'
+  readonly code: 'invalid_token' | 'inactive_token' | 'insufficient_scope' | 'insufficient_groups';  // default 'invalid_token'
+  // In browser flows only 'invalid_token' and 'insufficient_scope' are reachable — 'insufficient_scope' when the
+  // UserInfo endpoint answers 401/403 with WWW-Authenticate: error="insufficient_scope" (during callback processing
+  // or refetchUserInfo()). 'inactive_token' / 'insufficient_groups' are emitted only by the server-side
+  // introspection / API-protection path (@monocloud/backend-node), never by this SDK.
 }
 class MonoCloudHttpError extends MonoCloudAuthBaseError {
   get status(): number | undefined;       // from raw.status; undefined on network failure

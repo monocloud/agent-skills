@@ -25,10 +25,10 @@ The surface most apps actually reach for — full signatures and types follow be
 |---|---|
 | `authMiddleware` | `(options?) => NextMiddleware \| NextProxy` — also callable as `(req, evt) => Promise<NextMiddlewareResult>` for composition |
 | `monoCloudAuth` | `(options?) => MonoCloudAuthHandler` — catch-all route handler factory; use only when you can't use `authMiddleware()`. In the App Router export it for `POST` as well as `GET` (back-channel logout and the `form_post` response mode arrive as `POST`) |
-| `getSession` | `() / (req) / (req, res) / (req, res, options)` → `Promise<MonoCloudSession \| undefined>` |
+| `getSession` | `(options?) / (req, options?) / (req, res, options?)` → `Promise<MonoCloudSession \| undefined>` — `GetSessionOptions` is accepted at every arity, including with no request (e.g. `getSession({ refetchUserInfo: true })`) |
 | `getTokens` | Same overload shape as `getSession` → `Promise<MonoCloudTokens>`; throws `MonoCloudValidationError` if no session |
 | `isAuthenticated` | `() / (req, res?)` → `Promise<boolean>` |
-| `isUserInGroup` | `(groups[]) / (req, groups[]) / (req, res, groups[])` → `Promise<boolean>` |
+| `isUserInGroup` | `(groups[], options?) / (req, groups[], options?) / (req, res, groups[], options?)` → `Promise<boolean>` — the trailing `IsUserInGroupOptions` (`groupsClaim`, `matchAll`) is the only way to require all-of membership |
 | `protect` | `(options?) => Promise<void>` — App Router only; redirects if not authenticated/authorized |
 | `protectApi` | `(handler, options?)` — wraps an App Router or Pages Router handler |
 | `protectPage` | `(component, options?)` (App Router) **or** `(options?)` (Pages Router — returns `getServerSideProps`) |
@@ -102,7 +102,7 @@ interface MonoCloudOptions {
   groupsClaim?: string;      // default 'groups' — used as the fallback when a per-call `groupsClaim` is not passed to protect / protectApi / protectPage / protectClientPage / isUserInGroup
   clockSkew?: number;        // seconds; default 0; must be >= 0
   clockTolerance?: number;   // seconds; default 60; must be >= 0 — additional tolerance applied to time-based ID-token claim validations (exp / nbf / auth_time + maxAge)
-  responseTimeout?: number;  // ms
+  responseTimeout?: number;  // ms; default 10000; must be >= 1000 — abort timeout applied to every authorization-server request (discovery, JWKS, token, userinfo, PAR, revocation). Takes effect as of 0.2.8; earlier versions resolved it but never applied it
 
   // Caching
   jwksCacheDuration?: number;      // seconds (default 300)
@@ -324,7 +324,7 @@ interface ProtectClientPageOptions {
 }
 ```
 
-`useAuth()` requires no provider. It fetches `process.env.NEXT_PUBLIC_MONOCLOUD_AUTH_USER_INFO_URL ?? '/api/auth/userinfo'` via SWR.
+`useAuth()` requires no provider. It fetches `process.env.NEXT_PUBLIC_MONOCLOUD_AUTH_USER_INFO_URL` via SWR, falling back to the app's Next.js `basePath` + `/api/auth/userinfo`. A `NEXT_PUBLIC_` override is used verbatim, so include the `basePath` yourself when your app sets one. `<SignIn>` / `<SignUp>` / `<SignOut>` / `protectClientPage` resolve their URLs the same way.
 
 ## `@monocloud/auth-nextjs/components`
 
@@ -448,7 +448,7 @@ Every scalar option has a `MONOCLOUD_AUTH_*` env var alias (constructor options 
 | `MONOCLOUD_AUTH_USE_PAR` | `usePar` | Boolean |
 | `MONOCLOUD_AUTH_CLOCK_SKEW` | `clockSkew` | Seconds; default `0`. Must be `>= 0` |
 | `MONOCLOUD_AUTH_CLOCK_TOLERANCE` | `clockTolerance` | Seconds; default `60`. Must be `>= 0`. Applied to time-based ID-token claim checks (`exp`, `nbf`, `auth_time + maxAge`) |
-| `MONOCLOUD_AUTH_RESPONSE_TIMEOUT` | `responseTimeout` | Milliseconds |
+| `MONOCLOUD_AUTH_RESPONSE_TIMEOUT` | `responseTimeout` | Milliseconds; default `10000`. Must be `>= 1000`. Aborts any request to the authorization server (discovery, JWKS, token, userinfo, PAR, revocation); a timeout throws `MonoCloudHttpError` — `Request to <url> timed out after <ms>ms` |
 | `MONOCLOUD_AUTH_FEDERATED_SIGNOUT` | `federatedSignOut` | Boolean |
 | `MONOCLOUD_AUTH_ALLOW_QUERY_PARAM_OVERRIDES` | `allowQueryParamOverrides` | Boolean |
 | `MONOCLOUD_AUTH_POST_LOGOUT_REDIRECT_URI` | `postLogoutRedirectUri` | |
