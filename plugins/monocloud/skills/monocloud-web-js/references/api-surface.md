@@ -1,329 +1,206 @@
 # API surface — `@monocloud/auth-web-js`
 
-Exhaustive export list, verified against `packages/web-js/src/index.ts`. Method signatures are condensed; TypeScript intellisense (`go-to-definition`) is the source of truth for full request/response model fields.
+Verified against `@monocloud/auth-web-js@0.2.9` (`monocloud/auth-js` @ `30d7d98`).
 
-## Quick reference
+## Exports
 
-- Entry point: `new MonoCloudWebJSClient(options)` — one shared instance per app.
-- Most-used methods: `processCallback`, `signIn`, `signOut`, `signInSilent`, `refreshSession`, `refetchUserInfo`, `getTokens`, `getSession`.
-- Storage adapters (default `LocalStorage`): `LocalStorage`, `SessionStorage`, `MemoryStorage`, or your own `IStorage`.
-- Errors (all extend `MonoCloudAuthBaseError`): `MonoCloudOPError`, `MonoCloudValidationError`, `MonoCloudTokenError`, `MonoCloudHttpError`, `MonoCloudJsError`.
-- No environment variables. **All configuration is constructor-driven.**
+### `@monocloud/auth-web-js`
 
-## Top-level exports
+| Kind | Exports |
+| --- | --- |
+| Classes | `MonoCloudWebJSClient`, `MonoCloudOidcClient` (low-level OIDC client), `LocalStorage`, `SessionStorage`, `MemoryStorage` |
+| Errors | `MonoCloudAuthBaseError`, `MonoCloudOPError`, `MonoCloudValidationError`, `MonoCloudTokenError`, `MonoCloudHttpError`, `MonoCloudJsError` |
+| Types (this package) | `MonoCloudWebJSClientOptions`, `DefaultAuthParams`, `Indicator`, `IStorage`, `InteractionMode`, `ApplicationState`, `OnSessionCreating`, `PostCallback`, `CallbackState`, `SignInOptions`, `SignInSilentOptions`, `SignOutOptions`, `RefreshOptions`, `GetTokensOptions`, `MonoCloudTokens` |
+| Types (from `@monocloud/auth-core`) | `MonoCloudSession`, `MonoCloudUser`, `AccessToken`, `IdTokenClaims`, `UserinfoResponse`, `Address`, `Group`, `AuthState`, `AuthorizationParams`, `Authenticators`, `CallbackParams`, `ClientAuthMethod`, `CodeChallengeMethod`, `DisplayOptions`, `EndSessionParameters`, `IssuerMetadata`, `Jwk`, `Jwks`, `JwsHeaderParameters`, `MtlsEndpointAliases`, `ParResponse`, `Prompt`, `PushedAuthorizationParams`, `ResponseModes`, `ResponseTypes`, `SecurityAlgorithms`, `Tokens`, `AuthenticateOptions`, `MonoCloudClientOptionsBase`, `RefreshGrantOptions`, `RefreshSessionOptions`, `RefetchUserInfoOptions` |
 
-```ts
-import {
-  // Main client
-  MonoCloudWebJSClient,
+Not exported here: `MonoCloudRawResponse`, `MonoCloudTokenErrorCode`, `JwtClaims`, `IsUserInGroupOptions`, `MonoCloudOidcBackendClient`. No default export.
 
-  // Storage adapters
-  LocalStorage,
-  SessionStorage,
-  MemoryStorage,
+### Subpaths
 
-  // Errors
-  MonoCloudJsError,             // browser/environment failure (this package)
-  MonoCloudOPError,             // re-exported from @monocloud/auth-core
-  MonoCloudValidationError,
-  MonoCloudTokenError,
-  MonoCloudHttpError,
-  MonoCloudAuthBaseError,
+| Import | Contents |
+| --- | --- |
+| `@monocloud/auth-web-js/utils` | `isUserInGroup(user, groups, groupsClaim = 'groups', matchAll = false)`, `parseCallbackParams`, `generateState`, `generateNonce`, `generatePKCE`, `encrypt` / `decrypt`, `encryptSession` / `decryptSession`, `encryptAuthState` / `decryptAuthState` |
+| `@monocloud/auth-web-js/internal` | SDK-internal helpers — not for application code |
 
-  // Low-level OIDC client (advanced)
-  MonoCloudOidcClient,
-} from '@monocloud/auth-web-js';
-
-import type {
-  // Client / option types
-  MonoCloudWebJSClientOptions,
-  DefaultAuthParams,
-  Indicator,
-  IStorage,
-  InteractionMode,
-  ApplicationState,
-  OnSessionCreating,
-  PostCallback,
-  CallbackState,
-
-  // Per-call option shapes
-  SignInOptions,
-  SignInSilentOptions,
-  SignOutOptions,
-  RefreshOptions,
-  GetTokensOptions,
-  MonoCloudTokens,
-
-  // Re-exported from @monocloud/auth-core
-  AccessToken,
-  AuthenticateOptions,
-  ClientAuthMethod,
-  MonoCloudClientOptionsBase,
-  PushedAuthorizationParams,
-  RefreshSessionOptions,
-  AuthState,
-  Authenticators,
-  AuthorizationParams,
-  CallbackParams,
-  JwsHeaderParameters,
-  EndSessionParameters,
-  Group,
-  IdTokenClaims,
-  IssuerMetadata,
-  MtlsEndpointAliases,
-  SecurityAlgorithms,
-  Jwk,
-  Jwks,
-  MonoCloudSession,
-  MonoCloudUser,
-  Tokens,
-  Address,
-  UserinfoResponse,
-  CodeChallengeMethod,
-  DisplayOptions,
-  Prompt,
-  ResponseModes,
-  ResponseTypes,
-  RefreshGrantOptions,
-  RefetchUserInfoOptions,
-  ParResponse,
-} from '@monocloud/auth-web-js';
-```
-
-There is no separate subpath you need to import for normal use. The package also exposes `@monocloud/auth-web-js/utils` and `@monocloud/auth-web-js/internal`, which re-export helpers from `@monocloud/auth-core`; you only need them if you are writing custom OIDC logic on top of the SDK.
+No other subpaths exist (`/client`, `/react`, `/browser` are not real).
 
 ## `MonoCloudWebJSClient`
 
 ```ts
 class MonoCloudWebJSClient {
-  readonly oidcClient: MonoCloudOidcClient; // low-level OIDC client (advanced use)
-
   constructor(options: MonoCloudWebJSClientOptions);
+  readonly oidcClient: MonoCloudOidcClient;
 
   processCallback(): Promise<void>;
-
   signIn(options?: SignInOptions): Promise<void>;
   signOut(options?: SignOutOptions): Promise<void>;
   signInSilent(options?: SignInSilentOptions): Promise<MonoCloudSession>;
-
   refreshSession(options?: RefreshOptions): Promise<void>;
   refetchUserInfo(): Promise<void>;
-
   getTokens(options?: GetTokensOptions): Promise<MonoCloudTokens>;
   getSession(): Promise<MonoCloudSession | undefined>;
 }
 ```
 
-### Method semantics
+| Method | Behavior | Throws (message) |
+| --- | --- | --- |
+| `processCallback()` | Reads and clears the pending state. Sign-in state on `appUrl + callbackPath`: validates, exchanges the code (or reads the fragment for implicit types), stores the session, awaits `postCallback`. Sign-out state on `appUrl + signOutPath`: clears the session, checks `state`, awaits `postCallback`. Anything else: no-op. In an SDK-opened popup/iframe it posts the URL to the opener/parent instead. | `MonoCloudValidationError` (`Sign in callback states mismatch`, `Sign out states mismatch`, `Response is missing 'code'`, …), `MonoCloudOPError` (`error` in the callback URL), `MonoCloudTokenError`, `MonoCloudHttpError` |
+| `signIn(o?)` | Builds the authorize request (PKCE `S256`, `state`, `nonce`). Redirect: saves pending state, `location.assign()`, resolves before unload. Popup: opens `about:blank` synchronously, completes the flow in this page, stores the session, awaits `postCallback`. | `MonoCloudJsError` (`Cannot start a redirect sign-in from inside an iframe: …`, `Could not open popup`, `Window closed by user`, `Authentication window timed out`); popup mode also the callback errors above |
+| `signOut(o?)` | Clears the local session first. Non-federated: done. Federated: end-session URL with `id_token_hint` (`o.idTokenHint` ?? session ID token), `post_logout_redirect_uri` (`o.postLogoutRedirectUri` ?? `appUrl + signOutPath`) and `state`, by redirect or popup. | `MonoCloudJsError` (`Cannot start a redirect sign-out from inside an iframe: …` — thrown before clearing; popup errors as above), `MonoCloudValidationError` (`Sign out states mismatch`) |
+| `signInSilent(o?)` | Hidden iframe, `prompt=none`; resolves to the stored session. A failure leaves the existing session as is. | `MonoCloudOPError` (`login_required`, `interaction_required`, …), `MonoCloudJsError` (`Cannot create iframe in a cross-origin-isolated context`, `Authentication window timed out`) |
+| `refreshSession(o?)` | Refresh-token grant with `o.refreshGrantOptions` (`resource`, `scope`); UserInfo when `fetchUserinfo`; stores the session. | `MonoCloudValidationError` (`Ensure the user is authenticated before refreshing the session`, `Refresh token not found. Sign in with offline_access scope to get the refresh token.`), `MonoCloudOPError` (`invalid_grant`, …) |
+| `refetchUserInfo()` | UserInfo with the stored default access token (matching `defaultAuthParams.resource` and the session's `authorizedScopes`; not refreshed), merged into `session.user`. | `MonoCloudValidationError` (`Ensure the user is authenticated before refetching userinfo`, `Default token not found`, `Fetching userinfo requires the openid scope`), `MonoCloudTokenError` (UserInfo 401/403) |
+| `getTokens(o?)` | Returns a stored access token, refreshing first when none matches, it expires within 30 s, or `o.forceRefresh`. See [Token selection](#token-selection-in-gettokens). | `MonoCloudValidationError` (`Session does not exist`, `Session does not contain refresh token`), refresh-grant errors |
+| `getSession()` | Reads and parses the stored session; never refreshes or validates. | storage errors; `SyntaxError` for a corrupted stored value |
 
-| Method            | What it does                                                                                                  | Throws (typical)                                                       |
-| ----------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `processCallback` | Detects a pending sign-in or sign-out callback in the current URL and completes it. No-op otherwise.          | `MonoCloudValidationError` (bad callback state), `MonoCloudOPError`    |
-| `signIn`          | Starts an authorization request. `mode: 'redirect'` (default) or `'popup'`. `signUp: true` => `prompt=create`. | `MonoCloudJsError` (popup blocked, redirect from iframe)               |
-| `signOut`         | Ends the session locally; when `federatedSignOut`, also signs the user out of MonoCloud.                      | `MonoCloudJsError`                                                     |
-| `signInSilent`    | Hidden-iframe `prompt=none` authorization. Returns the new session.                                           | `MonoCloudOPError` (`login_required`, `interaction_required`), `MonoCloudJsError` (cross-origin-isolated context, window timeout) |
-| `refreshSession`  | Runs the Refresh Token Grant. Requires `offline_access` at sign-in.                                           | `MonoCloudValidationError` (no session, no refresh token)              |
-| `refetchUserInfo` | Calls the UserInfo endpoint with the default access token and updates `session.user`.                         | `MonoCloudValidationError` (no session, no default token)              |
-| `getTokens`       | Returns matching tokens, auto-refreshing when expired or missing (`{ forceRefresh: true }` to always refresh).| `MonoCloudValidationError`                                             |
-| `getSession`      | Returns the persisted session (or `undefined`). Does **not** refresh.                                          | —                                                                      |
+### Token selection in `getTokens()`
 
-`signInSilent`, `refreshSession`, `refetchUserInfo`, and `getTokens` are wrapped in cross-tab + in-flight dedupe locks (`navigator.locks` in secure contexts, `browser-tabs-lock` otherwise) so concurrent callers collapse onto a single network round-trip.
+- `resource` = `o.resource` ?? `defaultAuthParams.resource`.
+- `scopes` = `o.scopes`; if `o.resource` is given without `o.scopes`, the `scopes` of the `resources` entry with the same resource set.
+- With neither `o.resource` nor `o.scopes`, the token requested at sign-in (`session.authorizedScopes`) is used.
+- Matching is set-equality on the token's `resource` and `requestedScopes`.
+- A refresh sends `resource` / `scopes` as the grant's `resource` / `scope`, stores the new token alongside the others (one per resource + scope set), and fetches UserInfo only when `o.refetchUserInfo` is `true`.
+- Result: the token's fields plus `idToken`, `refreshToken`, `isExpired` (`accessTokenExpiration - 30 < now`).
+
+### Locking
+
+`signInSilent`, `refreshSession`, `refetchUserInfo` and `getTokens` run inside a deduplicating lock:
+
+- Concurrent calls in the same tab with identical arguments share one in-flight promise (so React StrictMode's double effects don't double-fire).
+- All four share one lock per client — `mc.lock.<clientId>[.<sessionKey>]` via `navigator.locks` in secure contexts, `browser-tabs-lock` otherwise — so they run one at a time, across tabs too.
+- Waiting more than 5 s for the lock rejects with `MonoCloudJsError` (`Failed to acquire lock: …` or `Failed to acquire lock.`), e.g. a `getTokens()` issued while a slow `signInSilent()` holds it.
 
 ## `MonoCloudWebJSClientOptions`
 
 ```ts
 interface MonoCloudWebJSClientOptions {
-  // Identity (required)
-  tenantDomain: string;          // e.g. "https://acme.us.monocloud.com"
+  tenantDomain: string;            // 'https://acme.us.monocloud.com' — 'https://' prepended if missing, trailing '/' removed
   clientId: string;
-
-  // Routes / origin
-  appUrl?: string;               // default: window.location.origin — used for redirect URIs + cross-origin postMessage validation
-  callbackPath?: string;         // default "/"
-  signOutPath?: string;          // default "/"
-
-  // Behavior toggles
-  validateIdToken?: boolean;     // default true
-  fetchUserinfo?: boolean;       // default true
-  federatedSignOut?: boolean;    // default true
-
-  // Time-based settings (seconds)
-  authWindowTimeout?: number;    // default 600
-  clockSkew?: number;            // default 0 (was 60 in <0.1.2); applied to all time-based claim validations
-  clockTolerance?: number;       // default 60; additional tolerance for ALL time-based ID-token claims (exp / nbf / auth_time + maxAge)
-
-  // Popup dimensions (pixels)
-  popupWindowWidth?: number;     // default 375
-  popupWindowHeight?: number;    // default 600
-
-  // ID token / claims
-  filteredIdTokenClaims?: string[]; // default: protocol claims
-  idTokenSigningAlgorithm?: SecurityAlgorithms; // default 'RS256' — also selects the SHA digest used to verify at_hash / s_hash in implicit flows; applies to public SPAs, not just confidential clients
-
-  // Authorization defaults (per-request overrides win)
+  appUrl?: string;                 // default window.location.origin; trailing '/' removed; may include a base path
+  callbackPath?: string;           // default '/'; leading '/' added if missing
+  signOutPath?: string;            // default '/'
   defaultAuthParams?: DefaultAuthParams;
-  resources?: Indicator[];
-
-  // Confidential-client extras (DO NOT use in a normal SPA)
-  clientSecret?: string | Jwk;
-  clientAuthMethod?: ClientAuthMethod;
-
-  // Caching (seconds)
-  jwksCacheDuration?: number;
-  metadataCacheDuration?: number;
-
-  // Persistence + integration
-  storage?: IStorage;            // default new LocalStorage()
-  sessionKey?: string;           // disambiguate same-clientId instances
-  postCallback?: PostCallback;   // router integration hook
+  resources?: Indicator[];         // { resource: string; scopes?: string } — both space-separated
+  storage?: IStorage;              // default new LocalStorage()
+  sessionKey?: string;             // suffix for session + lock keys
+  postCallback?: PostCallback;
   onSessionCreating?: OnSessionCreating;
+  federatedSignOut?: boolean;      // default true
+  fetchUserinfo?: boolean;         // default true
+  validateIdToken?: boolean;       // default true
+  idTokenSigningAlgorithm?: SecurityAlgorithms; // default 'RS256'; RS/PS/ES 256|384|512
+  filteredIdTokenClaims?: string[]; // removed from session.user; default iss, exp, nbf, aud, nonce, iat, auth_time, c_hash, at_hash, s_hash
+  clockSkew?: number;              // seconds added to "now" for ID-token checks; default 0
+  clockTolerance?: number;         // seconds of leeway for exp / nbf / auth_time + max_age; default 60
+  authWindowTimeout?: number;      // seconds, popup + silent iframe; default 600
+  popupWindowWidth?: number;       // px, default 375
+  popupWindowHeight?: number;      // px, default 600
+  jwksCacheDuration?: number;      // seconds, default 300
+  metadataCacheDuration?: number;  // seconds, default 300
+  clientSecret?: string | Jwk;     // confidential clients only — never in a browser bundle
+  clientAuthMethod?: ClientAuthMethod; // default 'client_secret_basic'
 }
 ```
+
+The ID token must also carry `iss` equal to the normalized `tenantDomain`, `aud` containing `clientId`, and a header `alg` equal to `idTokenSigningAlgorithm`.
 
 ### `DefaultAuthParams`
 
-```ts
-type DefaultAuthParams = Pick<
-  AuthorizationParams,
-  | 'scopes'
-  | 'resource'
-  | 'responseType'   // 'code' (default), 'token', 'id_token', 'id_token token',
-                     // 'code id_token', 'code token', 'code id_token token'
-  | 'prompt'
-  | 'display'
-  | 'uiLocales'
-  | 'acrValues'
-  | 'maxAge'
-  | 'loginHint'
-  | 'authenticatorHint'
-  | 'audience'
-  | 'idTokenHint'
->;
-```
+Typed as `Pick<AuthorizationParams, 'scopes' | 'resource' | 'responseType' | 'prompt' | 'display' | 'uiLocales' | 'acrValues' | 'maxAge' | 'loginHint' | 'authenticatorHint' | 'audience' | 'idTokenHint'>`, but the client reads only:
 
-Per-request values (`state`, `nonce`, `codeChallenge`, `codeChallengeMethod`, `redirectUri`) are owned by the SDK and cannot be set here.
+| Key | Effect |
+| --- | --- |
+| `scopes` | Merged (deduplicated) with per-call `scopes` and every `resources[].scopes`. Only when all are empty is `'openid profile email'` used. |
+| `resource` | Merged with per-call `resource` and every `resources[].resource` on the authorize request; also the `resource` for the code exchange, `getTokens()` and `refetchUserInfo()` defaults. |
+| `responseType` | Default `'code'`. Also `'token'`, `'id_token'`, `'id_token token'`, `'code id_token'`, `'code token'`, `'code id_token token'`. |
 
-For **hybrid response types** (`code id_token`, `code token`, `code id_token token`), the SDK always completes the back-channel authorization code exchange and uses those tokens. The front-channel `id_token` / `access_token` returned in the URL fragment are checked for presence but not validated or stored — the authoritative tokens come from the code exchange.
+The other keys are not sent — pass `prompt`, `display`, `uiLocales`, `acrValues`, `maxAge`, `loginHint`, `authenticatorHint`, `audience`, `idTokenHint` to `signIn()`. `state`, `nonce`, `codeChallenge`, `codeChallengeMethod` (`S256`) and `redirectUri` are always generated by the SDK.
 
-### `Indicator`
+### Response types
 
-```ts
-interface Indicator {
-  resource: string;        // space-separated resource indicators
-  scopes?: string;         // optional scopes specifically for this resource
-}
-```
+Keep `'code'` (Authorization Code + PKCE). Hybrid types always complete the back-channel code exchange and use those tokens; the front-channel `id_token` / `access_token` are only checked for presence. Implicit types (`token`, `id_token`, `id_token token`) are read from the URL fragment; with `validateIdToken`:
 
-Use `resources` when the app talks to multiple APIs with different audiences. `getTokens({ resource })` then knows which scope set to ask for.
+- `'id_token token'` requires a matching `at_hash` → otherwise `MonoCloudValidationError: Invalid 'at_hash' in id token`.
+- An `s_hash`, when present, must match the `state` → `Invalid 's_hash' in id token`.
+- Both hashes use the SHA size of `idTokenSigningAlgorithm` (`RS256` → SHA-256, `RS384` → SHA-384, …).
 
-## Per-call option types
+Implicit access tokens also need `expires_in` in the callback (`The 'expires_in' parameter is missing from the callback`) and, with `fetchUserinfo`, the `openid` scope (`Fetching userinfo requires the openid scope`).
 
-### `SignInOptions`
+## Per-call options
 
 ```ts
 interface SignInOptions {
-  mode?: 'redirect' | 'popup';        // default 'redirect'
-  signUp?: boolean;                   // true => prompt=create (wins over `prompt`)
-  prompt?: Prompt;
+  mode?: InteractionMode;              // 'redirect' (default) | 'popup'
+  signUp?: boolean;                    // prompt=create; wins over `prompt`
+  returnUrl?: string;                  // relative URL handed to postCallback
+  appState?: ApplicationState;         // Record<string, unknown>; JSON-serializable (redirects keep it in sessionStorage); 4th arg of onSessionCreating
+  scopes?: string;                     // merged with defaultAuthParams.scopes + resources[].scopes
+  resource?: string;                   // merged with defaultAuthParams.resource + resources[].resource
+  audience?: string;
+  prompt?: Prompt;                     // 'none' | 'login' | 'consent' | 'select_account' | 'create' | string
   loginHint?: string;
-  authenticatorHint?: Authenticators;
+  authenticatorHint?: Authenticators;  // 'password' | 'passkey' | 'email' | 'phone' | connection name
   uiLocales?: string;
-  display?: DisplayOptions;
+  display?: DisplayOptions;            // 'page' | 'popup' | 'touch' | 'wap' | string
   acrValues?: string[];
-  maxAge?: number;
-  scopes?: string;                    // merged with defaultAuthParams.scopes
-  resource?: string;                  // merged with defaultAuthParams.resource
-  audience?: string;                  // target API (audience) for the issued access token
-  idTokenHint?: string;               // previously issued ID token, sent as id_token_hint
-  returnUrl?: string;                 // surfaced to postCallback
-  appState?: ApplicationState;        // surfaced to onSessionCreating
+  maxAge?: number;                     // seconds; also enforced against the ID token's auth_time
+  idTokenHint?: string;
 }
-```
 
-### `SignInSilentOptions`
-
-```ts
-interface SignInSilentOptions {
-  maxAge?: number;
-  loginHint?: string;
-  acrValues?: string[];
+interface SignInSilentOptions {        // always prompt=none in a hidden iframe
   scopes?: string;
   resource?: string;
+  maxAge?: number;
+  loginHint?: string;
+  acrValues?: string[];
   appState?: ApplicationState;
 }
-```
 
-Always runs with `prompt=none` and through a hidden iframe.
-
-### `SignOutOptions`
-
-```ts
 interface SignOutOptions {
-  idTokenHint?: string;               // sent as id_token_hint; overrides the current session's ID token
-  mode?: 'redirect' | 'popup';
-  federatedSignOut?: boolean;         // overrides the client-level setting per call
-  postLogoutRedirectUri?: string;     // must be registered in the dashboard
-  returnUrl?: string;
-}
-```
-
-### `RefreshOptions`
-
-```ts
-interface RefreshOptions {
-  refreshGrantOptions?: RefreshGrantOptions;
+  mode?: InteractionMode;              // default 'redirect'
+  federatedSignOut?: boolean;          // overrides the client setting for this call
+  postLogoutRedirectUri?: string;      // replaces appUrl + signOutPath; must be a registered Sign-out URL
+  idTokenHint?: string;                // overrides the session's ID token
+  returnUrl?: string;                  // handed to postCallback
 }
 
-interface RefreshGrantOptions {
-  resource?: string;
-  scopes?: string;
-}
-```
-
-### `GetTokensOptions`
-
-```ts
+interface RefreshOptions { refreshGrantOptions?: RefreshGrantOptions }
+interface RefreshGrantOptions { resource?: string; scopes?: string }    // must be within what was granted
 interface GetTokensOptions extends RefreshGrantOptions {
-  forceRefresh?: boolean;             // refresh even if the token is still valid
-  refetchUserInfo?: boolean;          // re-call UserInfo after refresh
+  forceRefresh?: boolean;
+  refetchUserInfo?: boolean;           // fetch UserInfo when a refresh happens
 }
+interface MonoCloudTokens extends AccessToken { idToken?: string; refreshToken?: string; isExpired: boolean }
 ```
 
-### `MonoCloudTokens`
-
-```ts
-interface MonoCloudTokens extends AccessToken {
-  idToken?: string;
-  refreshToken?: string;
-  isExpired: boolean;                 // true when accessTokenExpiration - 30s < now
-}
-```
+A popup sign-out can only finish on `appUrl + signOutPath`; with a different `postLogoutRedirectUri`, use redirect mode (a popup ends with `Window closed by user` or a timeout).
 
 ## Session shape
 
-`MonoCloudSession` is re-exported from `@monocloud/auth-core`:
-
 ```ts
 interface MonoCloudSession {
-  user: MonoCloudUser;                // ID-token claims + UserInfo claims (filtered)
+  user: MonoCloudUser;                 // ID-token claims (minus filteredIdTokenClaims) merged with UserInfo
   idToken?: string;
-  accessTokens?: AccessToken[];
+  accessTokens?: AccessToken[];        // one per resource + scope set
   refreshToken?: string;
-  authorizedScopes?: string;          // space-separated
+  authorizedScopes?: string;           // scopes requested at sign-in
+  [key: string]: unknown;              // custom fields added in onSessionCreating
 }
 
 interface AccessToken {
   accessToken: string;
-  scopes: string;                     // space-separated, actually granted
-  requestedScopes?: string;           // space-separated, what we asked for
-  resource?: string;                  // audience / resource indicator
-  accessTokenExpiration: number;      // unix seconds
+  accessTokenExpiration: number;       // epoch seconds
+  scopes: string;                      // granted
+  requestedScopes?: string;
+  resource?: string;
 }
+
+interface MonoCloudUser extends UserinfoResponse { amr?: string[]; idp?: string }
+// UserinfoResponse: sub, name, given_name, family_name, email, email_verified, picture, groups?: Group[], …, [claim: string]: unknown
+// Group = string | { id: string; name: string }
 ```
 
-A session can carry multiple `AccessToken`s — one per `(resource, scope-set)`. `getTokens({ resource, scopes })` picks the right one.
-
-## Storage adapter contract
+## Storage
 
 ```ts
 interface IStorage {
@@ -331,135 +208,80 @@ interface IStorage {
   setItem(key: string, value: string): Promise<void>;
   removeItem(key: string): Promise<void>;
 }
-
-class LocalStorage   implements IStorage {}
-class SessionStorage implements IStorage {}
-class MemoryStorage  implements IStorage {}
 ```
 
-Built-in adapters:
+`LocalStorage` (default), `SessionStorage` and `MemoryStorage` implement it.
 
-| Class            | Backing                  | Survives tab close? | Shared between tabs? |
-| ---------------- | ------------------------ | ------------------- | -------------------- |
-| `LocalStorage`   | `window.localStorage`    | yes                 | yes (same origin)    |
-| `SessionStorage` | `window.sessionStorage`  | no                  | no                   |
-| `MemoryStorage`  | in-memory object         | no                  | no                   |
+| Key | Location | Content |
+| --- | --- | --- |
+| `mc.session.<clientId>[.<sessionKey>]` | configured `IStorage` | JSON session |
+| `mc.state.<clientId>` | always `window.sessionStorage` | pending flow (`state`, `nonce`, PKCE verifier, `scopes`, `mode`, `returnUrl`, `appState`, …) — keyed by `clientId` only, not `sessionKey` |
+| `mc.lock.<clientId>[.<sessionKey>]` | `navigator.locks` / `browser-tabs-lock` | operation lock |
 
-All three methods **must** return promises. Synchronous backends should wrap with `Promise.resolve(...)`.
-
-### Internal storage keys
-
-| Purpose                        | Key shape                                                                  | Storage backend                  |
-| ------------------------------ | -------------------------------------------------------------------------- | -------------------------------- |
-| Session                        | `mc.session.<clientId>[.<sessionKey>]`                                     | configured `IStorage` (default `LocalStorage`) |
-| Callback state (pre-redirect)  | `mc.state.<clientId>`                                                      | `window.sessionStorage` (always) |
-| Lock key for cross-tab dedupe  | `mc.lock.<clientId>[.<sessionKey>]`                                        | `navigator.locks` or `browser-tabs-lock` |
-
-The callback state lives in `sessionStorage` regardless of which `IStorage` you configure — it must survive a redirect but doesn't need to persist beyond the tab.
-
-## Callback hooks
-
-### `PostCallback`
+## Hooks
 
 ```ts
 type PostCallback = (state: CallbackState) => Promise<void> | void;
 
-interface CallbackState extends Partial<AuthState> {
-  signOut?: boolean;              // true when this is a sign-out callback
+interface CallbackState extends Partial<AuthState> {  // AuthState: state, nonce, codeVerifier?, maxAge?, resource?, scopes
   mode: 'popup' | 'redirect' | 'silent';
+  signOut?: boolean;
   returnUrl?: string;
   appState?: ApplicationState;
   responseType?: ResponseTypes;
 }
-```
 
-Default implementation: on sign-in, strip `?…` and `#…` from the current URL with `history.replaceState`; if a `returnUrl` is set, do a full page reload to it (origin-checked against `appUrl`). Provide a custom `postCallback` to use your router instead.
-
-### `OnSessionCreating`
-
-```ts
 type OnSessionCreating = (
-  session: MonoCloudSession,
+  session: MonoCloudSession,           // mutate in place; stored afterwards
   idToken?: Partial<IdTokenClaims>,
   userInfo?: UserinfoResponse,
-  state?: ApplicationState,
+  state?: ApplicationState,            // appState — sign-in flows only
 ) => Promise<void> | void;
 ```
 
-Fires every time the SDK is about to persist a new or updated session — after sign-in callback processing, after `refreshSession`, after `refetchUserInfo`, after the auto-refresh inside `getTokens()`, and on silent sign-in. Mutate `session` in place to attach app-specific data.
+- `postCallback` runs in the main window, and is awaited, after: redirect sign-in (via `processCallback()`), popup and silent sign-in, redirect and popup federated sign-out. Never after a non-federated sign-out or a refresh.
+- Default `postCallback`: no `returnUrl` → strip query and hash with `history.replaceState`; `returnUrl` resolving to `appUrl`'s origin → `window.location.href = …` (full load, logging a warning about `MemoryStorage`); other origins → `console.warn('Ignoring returnUrl "…" because it resolves to a different origin than appUrl.')`, no navigation.
+- `onSessionCreating` runs before each session write that builds a session: sign-in (all modes), `refreshSession()`, the refresh inside `getTokens()`, and `refetchUserInfo()` (with `idToken` undefined).
+
+## `client.oidcClient` (`MonoCloudOidcClient`)
+
+Low-level OIDC client sharing the tenant, `clientId` and metadata/JWKS caches. Calling it directly bypasses session storage.
+
+| Member | Purpose |
+| --- | --- |
+| `revokeToken(token, tokenType?)` | Revoke a token (`tokenType`: `'access_token'` \| `'refresh_token'`). The stored session is not changed. |
+| `userinfo(accessToken)` | Raw UserInfo call. |
+| `getMetadata(forceRefresh?)` / `getJwks(forceRefresh?)` | Discovery document / JWKS, cached for `metadataCacheDuration` / `jwksCacheDuration`. |
+| `MonoCloudOidcClient.decodeJwt(jwt)` (static) | Decodes a JWT payload **without verifying it**; throws `MonoCloudTokenError` (`JWT does not contain payload`, `Payload is not an object`, `Could not parse payload. Malformed payload`). |
+
+Also present (used internally by `MonoCloudWebJSClient`): `authorizationUrl`, `exchangeAuthorizationCode`, `authenticate`, `refreshGrant`, `refreshSession`, `refetchUserInfo`, `endSessionUrl`, `validateIdToken`, `pushedAuthorizationRequest`, device-flow methods.
 
 ## Errors
 
 ```ts
 class MonoCloudAuthBaseError extends Error {
-  // Present only on errors derived from an unsuccessful HTTP response.
-  // Shape: { status, statusText, headers (repeated headers comma-joined, set-cookie excluded), body (unparsed) }.
-  // NOTE: `MonoCloudRawResponse` and `MonoCloudTokenErrorCode` are NOT re-exported by this package —
-  // inline the shapes/union shown here instead of importing them from '@monocloud/auth-web-js'.
-  readonly raw?: MonoCloudRawResponse;
+  readonly raw?: { status: number; statusText: string; headers: Record<string, string>; body: string };
 }
-
-class MonoCloudOPError extends MonoCloudAuthBaseError {
-  error: string;                      // OAuth error code (e.g. 'login_required')
-  errorDescription?: string;
-}
-
+class MonoCloudOPError extends MonoCloudAuthBaseError { error: string; errorDescription?: string } // message === error
 class MonoCloudValidationError extends MonoCloudAuthBaseError {}
-class MonoCloudTokenError      extends MonoCloudAuthBaseError {
-  // Browser flows only ever produce 'invalid_token' (ID-token / UserInfo failures) and
-  // 'insufficient_scope' (UserInfo WWW-Authenticate). 'inactive_token' and 'insufficient_groups'
-  // come from server-side introspection / API protection and are never raised by this package.
+class MonoCloudTokenError extends MonoCloudAuthBaseError {
   readonly code: 'invalid_token' | 'inactive_token' | 'insufficient_scope' | 'insufficient_groups';
 }
-class MonoCloudHttpError       extends MonoCloudAuthBaseError {
-  get status(): number | undefined;     // from `raw`; undefined on a network failure
+class MonoCloudHttpError extends MonoCloudAuthBaseError {
+  get status(): number | undefined;
   get statusText(): string | undefined;
 }
-class MonoCloudJsError         extends MonoCloudAuthBaseError {}
+class MonoCloudJsError extends MonoCloudAuthBaseError {}
 ```
 
-Errors raised from an unsuccessful HTTP response carry a `raw` (`{ status, statusText, headers, body }`); `MonoCloudHttpError` also exposes `status` / `statusText` getters and `MonoCloudTokenError` a `code` discriminator. Use `instanceof` to branch; for `MonoCloudOPError`, also branch on `.error` (`login_required`, `interaction_required`, `access_denied`, `invalid_grant`, etc.).
+- `raw` is set only on errors built from an HTTP response (headers exclude `set-cookie`). Its type `MonoCloudRawResponse` is not exported — inline the shape.
+- In the browser `MonoCloudTokenError.code` is `'insufficient_scope'` (UserInfo `WWW-Authenticate: error="insufficient_scope"`) or `'invalid_token'`; `'inactive_token'` / `'insufficient_groups'` come from backend token validation.
+- `MonoCloudOPError` sources: `error` in the callback URL; token or revocation endpoint 400/401 (`code_grant_failed`, `refresh_grant_failed` or `revocation_failed` when the body has no `error`).
+- `MonoCloudHttpError` messages: `Error while fetching metadata. Unexpected status code: <n>` (likewise JWKS, userinfo, `token grant`, `refresh token grant`); the browser's fetch error text on network/CORS failure (no `status`); `Failed to parse response body as JSON…`.
+- ID-token validation messages are listed in [troubleshooting.md](troubleshooting.md#id-token-validation-errors-monocloudtokenerror).
 
-## Response types and the auth code default
+## Scope of the SDK
 
-`defaultAuthParams.responseType` defaults to `'code'` (Authorization Code with PKCE). The SDK supports the seven OIDC response types:
-
-`'code'`, `'token'`, `'id_token'`, `'id_token token'`, `'code id_token'`, `'code token'`, `'code id_token token'`.
-
-For normal SPAs, stick with the default — it is the most secure and avoids the front-channel-fragment validation gaps noted in `defaultAuthParams` above.
-
-### Implicit-flow `at_hash` / `s_hash` validation
-
-When `validateIdToken` is `true` (the default) and an implicit-flow response type is used, `processCallback()` runs two additional ID-token integrity checks against the front-channel response:
-
-- **`at_hash`** — required for `responseType: 'id_token token'`. The SDK hashes the front-channel `access_token` using the digest implied by `idTokenSigningAlgorithm` (default `'RS256'` → SHA-256, `'RS384'` → SHA-384, etc.) and compares the result against the ID token's `at_hash` claim. Mismatch or absence throws `MonoCloudValidationError("Invalid 'at_hash' in id token")`.
-- **`s_hash`** — when an `s_hash` claim is present on the ID token in any implicit flow, the SDK compares it against the persisted callback `state`. Mismatch throws `MonoCloudValidationError("Invalid 's_hash' in id token")`.
-
-This is why `idTokenSigningAlgorithm` matters even for **public SPAs**: it controls which SHA digest the implicit-flow hash validators use, not just confidential-client signature verification.
-
-## What this SDK does **not** do
-
-- It is browser-only. There are no Node entry points; the constructor references `window`, `document`, `history`, and `navigator`.
-- It does not render UI. No buttons, modals, or hosted widget — you call `signIn()` / `signOut()` from your own handlers.
-- It does not manage server-side sessions. Cookies are the OP's; tokens live in `IStorage`.
-- It does not validate access tokens. That is the API's job (see `@monocloud/backend-node` for Express/Fastify, or implement validation in your server).
-
-## Defaults summary
-
-| Setting               | Default                                            |
-| --------------------- | -------------------------------------------------- |
-| `appUrl`              | `window.location.origin`                           |
-| `storage`             | `new LocalStorage()`                               |
-| `callbackPath` / `signOutPath` | `"/"`                                     |
-| `validateIdToken`     | `true`                                             |
-| `fetchUserinfo`       | `true`                                             |
-| `federatedSignOut`    | `true`                                             |
-| `authWindowTimeout`   | `600` (sec)                                        |
-| `clockSkew`           | `0` (sec) — was `60` in <0.1.2                     |
-| `clockTolerance`      | `60` (sec) — applies to all time-based ID-token claims (`exp`, `nbf`, `auth_time + maxAge`) |
-| `idTokenSigningAlgorithm` | `'RS256'` — also selects the SHA digest for `at_hash` / `s_hash` |
-| `popupWindowWidth`    | `375`                                              |
-| `popupWindowHeight`   | `600`                                              |
-| `defaultAuthParams.responseType` | `'code'`                                |
-| Default scopes when none configured | `'openid profile email'`             |
-| Filtered ID-token claims | `iss, exp, nbf, aud, nonce, iat, auth_time, c_hash, at_hash, s_hash` |
+- Browser only: flows use `window`, `document`, `history`, `sessionStorage` and Web Locks.
+- No UI: wire `signIn()` / `signOut()` to your own controls (React components live in `@monocloud/auth-react`).
+- No server sessions and no access-token validation — APIs validate tokens themselves (`@monocloud/backend-node`).

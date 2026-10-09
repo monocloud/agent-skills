@@ -1,260 +1,102 @@
 # Troubleshooting — `@monocloud/management`
 
-Quick reference for the most common things that go wrong when calling the MonoCloud Management API from Node.js. Each entry is **symptom → cause → fix**. Every symbol below is grounded in `@monocloud/management@0.2.11`; the full method surface lives in [`api-surface.md`](api-surface.md).
+Symptom → cause → fix. Exception classes and handling are in [`SKILL.md` → Errors](../SKILL.md#errors); every method signature is in [`api-surface.md`](api-surface.md).
 
-## `init()` throws before any request is made
+## `init()` throws `Tenant Domain is required` / `Api Key is required`
 
-**Symptom:** `MonoCloudManagementClient.init(...)` throws `MonoCloudException: Tenant Domain is required` or `Api Key is required` (or `Configuration is required`) — you never even reach the network.
+**Cause:** when `init()` ran, the option was `undefined` and its env var (`MONOCLOUD_MANAGEMENT_DOMAIN` / `MONOCLOUD_MANAGEMENT_API_KEY`) was empty. Usually the client is created at import time, before `dotenv` (or the framework) loads the env file; or the variable exists only in another environment. An explicit `domain: ''` never falls back to the env var.
 
-**Cause:** `init()` falls back to env vars when an option is omitted, then validates. If both the option and its env var are empty, it throws immediately: `domain` ← `MONOCLOUD_MANAGEMENT_DOMAIN`, `apiKey` ← `MONOCLOUD_MANAGEMENT_API_KEY`. Empty strings count as missing.
+**Fix:** load env before creating the client (`import 'dotenv/config'` first in the entry point) or create it lazily on first use, and log `Boolean(process.env.MONOCLOUD_MANAGEMENT_DOMAIN)` just before `init()` to confirm. `Configuration is required` means plain-JS `new MonoCloudManagementClient()` — use `init()`.
 
-**Fix:** Ensure exactly one source supplies each value, and confirm the env vars are visible to the Node process:
+## Every call throws `MonoCloudException: Something went wrong.`
 
-```bash
-node -e 'console.log(!!process.env.MONOCLOUD_MANAGEMENT_DOMAIN, !!process.env.MONOCLOUD_MANAGEMENT_API_KEY)'
-# expect: true true
-```
+**Cause:** no usable HTTP response reached the SDK, and it discards the original error. Typical reasons: DNS / TLS / connection failure or a blocking proxy; a domain with another scheme (only a lowercase `https://` prefix is recognized, so `http://acme…` is requested as `https://http//acme…`); Node < 18 without global `fetch` / `AbortSignal.timeout`; a negative or `NaN` `config.timeout`; a 2xx body that isn't JSON; or a custom fetcher that throws.
 
-The constructor is **private** — you cannot `new MonoCloudManagementClient()`. Always use the static factory `MonoCloudManagementClient.init(options?, fetcher?)`.
+**Fix:** set the domain to `acme.us.monocloud.com` or `https://acme.us.monocloud.com`, check reachability with `curl -H "X-API-KEY: $MONOCLOUD_MANAGEMENT_API_KEY" "https://<tenant-host>/api/users?size=1"`, and to see the underlying error, temporarily pass a [custom fetcher](api-surface.md#custom-fetcher) that logs before rethrowing.
 
-## 401 Unauthorized on every call
+## Every call throws `MonoCloudNotFoundException` (404)
 
-**Symptom:** Every Management call throws `MonoCloudUnauthorizedException`, even read-only ones.
+**Cause:** the domain includes a path such as `/api` or `/api/v1`; the SDK appends `/api/` itself, producing `…/api/api/users`.
 
-**Cause:** The API key is present but wrong, revoked, or scoped to a different tenant. The key is sent as the `X-API-KEY` header; a dev-tenant key against a prod-tenant `MONOCLOUD_MANAGEMENT_DOMAIN` returns 401.
+**Fix:** use the bare tenant host. A 404 from a single `find*` / `patch*` / `delete*` call usually means a wrong id instead — e.g. `user.id` (the field is `user_id`) or transposed `ResourcesClient` ids (`findApiScopeById(scopeId, apiId)` takes the child id first).
 
-**Fix:**
+## Every call throws `MonoCloudUnauthorizedException` (401)
 
-1. Confirm the key is reaching Node: `node -e 'console.log(process.env.MONOCLOUD_MANAGEMENT_API_KEY?.slice(0,4))'` should print the first 4 chars (not `undefined`).
-2. Confirm the tenant matches the key — keys are scoped to a single tenant.
-3. Generate a fresh key in the MonoCloud dashboard, paste it into the env var, and restart the process.
+**Cause:** the `X-API-KEY` header is wrong, revoked, belongs to another tenant than `domain`, or is missing because a custom fetcher doesn't set it.
 
-## "Cannot find module '@monocloud/management-core'"
+**Fix:** generate a key for this tenant in the MonoCloud dashboard, update the env var, and restart the process.
 
-**Symptom:** Build / runtime fails with a missing-module error for `@monocloud/management-core`.
+## `MonoCloudForbiddenException` (403) or `MonoCloudPaymentRequiredException` (402) on specific calls
 
-**Cause:** Application code imports from `@monocloud/management-core` directly. That is the internal core package; the public package is `@monocloud/management`.
+**Cause:** the method, or a field you set, requires a higher plan ([method gates](../SKILL.md#subscription-plans), [field gates](api-surface.md#field-level-plan-gates)), or the API key isn't allowed to perform the operation. The SDK has no client-side check; the server rejects the request.
 
-**Fix:** Import from the public package. The client, `MonoCloudResponse`, `MonoCloudConfig`, `Fetcher`, `IdentityError`, and the **entire exception hierarchy** are all re-exported from `@monocloud/management`:
+**Fix:** read `e.errorCode` and `e.response?.detail`, then upgrade the plan, use a permitted key, or remove the gated field. Handle both classes when you surface "upgrade required" messages.
 
-```ts
-// wrong
-import { MonoCloudException } from "@monocloud/management-core";
+## 422 validation errors
 
-// right
-import { MonoCloudException } from "@monocloud/management";
-```
+- `MonoCloudIdentityValidationException`: `e.errors` is `{ code, description }[]` from the identity system.
+- `MonoCloudKeyValidationException`: `e.errors` is `Record<string, string[]>`, keyed by request field.
+- `MonoCloudModelStateException`: any other 422; details are in `e.response?.detail` (or `e.message` when the body isn't problem+json).
 
-## `MonoCloudPageResponse` / `PageModel` cannot be imported from the package root
+Map `errors` to your inputs rather than string-matching `e.message` (which embeds them as JSON). For user migrations, `CreateUserRequest` accepts `password_hash` + `password_hash_algorithm` and the `skip_password_policy_checks`, `skip_identifier_restriction_checks` and `skip_conformance_checks` flags.
 
-**Symptom:** `import { MonoCloudPageResponse } from "@monocloud/management"` (or `PageModel`, or `ProblemDetails`) resolves to `undefined` / a type error — even though these names appear in method return-type signatures.
+## `MonoCloudResourceExhaustedException` (429)
 
-**Cause:** These types live in `@monocloud/management-core` and are **not** re-exported from the `@monocloud/management` barrel. Only `MonoCloudResponse` and the exception/config/`Fetcher`/`IdentityError` symbols are surfaced at the root.
+**Cause:** rate limited. The SDK never retries, and exceptions don't expose response headers such as `Retry-After`.
 
-**Fix:** Don't name the paginated envelope explicitly — let inference do it, or destructure the fields you need:
+**Fix:** back off and retry in your code, or retry inside a custom fetcher ([example](api-surface.md#custom-fetcher)); fetch larger pages instead of many small calls.
 
-```ts
-// no explicit type needed; the method return type carries it
-const { result, pageData } = await client.users.getAllUsers(1, 50);
-//      ^ UserSummary[]     ^ PageModel  (page_size, current_page, total_count, has_previous, has_next)
-```
+## Timeouts fire too early, too late, or the env var is ignored
 
-If you genuinely need the named type in an annotation, import it from `@monocloud/management-core` — but inference is almost always enough.
+- `config.timeout` and `MONOCLOUD_MANAGEMENT_TIMEOUT` are **milliseconds** (default `10000`): `30` means 30 ms.
+- The env var applies only when `options.config` is omitted, and is read with `parseInt(value, 10)`: `30s` → 30 ms, `0` / `abc` → ignored (10000 ms).
+- `config.timeout: 0` aborts every request — there is no "disable timeout" value; use a large number.
+- In TypeScript, `init({ config: { timeout } })` without `domain` and `apiKey` doesn't compile; pass all three or use the env var.
+- A timeout throws a base `MonoCloudException` (not a `MonoCloudRequestException`) with the runtime's abort message (Node: `The operation was aborted due to timeout`); there is no timeout class.
 
-## Domain with `/api` appended
+## `errorCode` is `undefined` or doesn't type-check
 
-**Symptom:** Every call 404s even though credentials are correct.
+**Cause:** only the 400/402/403/404/409 classes have `errorCode` — not 401/422/429/500, and not a variable typed `MonoCloudRequestException` / `MonoCloudException`. On those classes it is `undefined` when the server sent no code or the body wasn't `application/problem+json` (`.response` is then `undefined` too).
 
-**Cause:** `MONOCLOUD_MANAGEMENT_DOMAIN` (or the `domain` option) contains `/api` or `/api/v1`. The SDK sanitizes the domain (prepends `https://` if missing, strips a trailing `/`) and then appends `/api/` itself — a duplicated prefix yields `…/api/api/users`.
+**Fix:** narrow to a concrete class with `instanceof` and treat the code as optional, or read `e.response?.error_code` generically. The SDK ships no list of codes: compare only against codes you have observed or that MonoCloud documents.
 
-**Fix:** Pass the bare tenant host only:
+## Import errors for `MonoCloudPageResponse`, `PageModel`, `ProblemDetails`, `MonoCloudCodedException` or `@monocloud/management-core`
 
-```bash
-# wrong
-MONOCLOUD_MANAGEMENT_DOMAIN=https://acme.us.monocloud.com/api/v1
+**Symptom:** `Module '"@monocloud/management"' has no exported member …`, an ESM "does not provide an export named" error, or `Cannot find module '@monocloud/management-core'`.
 
-# right — with or without the scheme, both work
-MONOCLOUD_MANAGEMENT_DOMAIN=acme.us.monocloud.com
-```
+**Cause:** these types are core-only, and the core package is an internal dependency that strict installs (e.g. pnpm) don't expose to app code.
 
-Same applies when passing `domain` to `MonoCloudManagementClient.init({ domain })` in code.
+**Fix:** import only from `@monocloud/management` and derive the types from method return types ([snippet](../SKILL.md#response-shape)); for coded errors use the concrete classes or `e.response?.error_code`.
 
-## API key ends up in a browser bundle
+## Only one page of results
 
-**Symptom:** A secret-scanner or linter flags the API key leaking to client code, or you see the value of `MONOCLOUD_MANAGEMENT_API_KEY` in DevTools.
+`getAll*` methods return a single page — loop until `pageData.has_next` is `false` ([loop](../SKILL.md#pagination)). Six list methods are not paginated and have no `pageData`. A `pageData` of zeros means the response carried no `x-pagination` header (e.g. a custom fetcher or proxy dropped it).
 
-**Cause:** Management code (or its env var) was imported from a browser-shipped path. The Management SDK holds a **tenant-admin** key and is server-only.
+## `res.data` is `undefined`
 
-**Fix:** Keep every `MonoCloudManagementClient` call in a server context:
+The body is on `.result` (and paging info on `.pageData`); `.Data` / `.PageData` belong to the .NET SDK. Empty responses resolve with `result === null`.
 
-- Never reference `MONOCLOUD_MANAGEMENT_API_KEY` from a `"use client"` component or any browser-bundled module.
-- Never prefix the env var with `NEXT_PUBLIC_` / `VITE_` — that is the bridge into the client bundle.
-- In Next.js keep calls inside Server Actions, Route Handlers, or `getServerSideProps`; elsewhere put them behind a backend endpoint that authorizes the user first.
+## Patch calls don't do what you expected
 
-## `patch*` deleting fields you didn't touch
+- **TypeScript rejects `audience` or `name`** ("Object literal may only specify known properties"): identifiers aren't part of `PatchApiResourceRequest`, `PatchApiScopeRequest`, `PatchScopeRequest` or `PatchClaimResourceRequest`. Delete and recreate to change them.
+- **Value unchanged:** only keys present in the body are written; `undefined` keys are dropped when the body is serialized.
+- **Value removed:** sending `null` for a key (e.g. inside `private_data`) removes it.
+- **Built-in claim can't be patched:** `patchClaimResource` only modifies custom claims.
 
-**Symptom:** After `patchPrivateData(id, { private_data: { onboarded: true } })`, the user's other private-data fields are gone.
+## The management API key reaches the browser
 
-**Cause:** The whole nested object was replaced rather than merged. Every update method on this SDK is a `patch*` (partial merge) — there are **no** PUT / full-replace methods on the public surface. Top-level keys you include are written and keys you omit are left alone, but the *value* you supply replaces the previous value for that key.
+**Cause:** management code or its env var is imported into a client bundle.
 
-**Fix:** Send only the keys you intend to change; to clear one, send it as `null`:
+**Fix:** call the SDK only from server code (route handlers, server actions, backend services); never import it in a `"use client"` module, and never prefix the variable with `NEXT_PUBLIC_` / `VITE_`. Rotate any key that has shipped to a browser.
 
-```ts
-// merges onto existing private_data; leaves other keys alone
-await client.users.patchPrivateData(id, { private_data: { onboarded: true } });
+## Code calls methods or classes that don't exist
 
-// clear a single key
-await client.users.patchPrivateData(id, { private_data: { secret_question: null } });
-```
-
-## Catching `Error` and losing status info
-
-**Symptom:** Every failure collapses into one generic branch and you can't tell 404 from 409 from 422. Or `e.statusCode` is `undefined` even though the call clearly failed with a specific status.
-
-**Cause:** The handler catches bare `Error`. The SDK throws a typed hierarchy, but the type was discarded. Note there is **no** `statusCode` property on any of these exceptions — the base `MonoCloudException` extends `Error` and only carries `.message`. Status information comes from either an `instanceof` check against the specific subclass or from `(e as MonoCloudRequestException).response?.status` (the parsed `application/problem+json` body).
-
-The full mapping (status → class), all extending `MonoCloudRequestException` except the base:
-
-| Status | Exception |
-| --- | --- |
-| 400 | `MonoCloudBadRequestException` |
-| 401 | `MonoCloudUnauthorizedException` |
-| 402 | `MonoCloudPaymentRequiredException` |
-| 403 | `MonoCloudForbiddenException` |
-| 404 | `MonoCloudNotFoundException` |
-| 409 | `MonoCloudConflictException` |
-| 422 | `MonoCloudIdentityValidationException` / `MonoCloudKeyValidationException` / `MonoCloudModelStateException` |
-| 429 | `MonoCloudResourceExhaustedException` |
-| 500 | `MonoCloudServerException` |
-| config / timeout / unknown | `MonoCloudException` (base) |
-
-The two validation subclasses additionally expose `.errors: IdentityError[]`. All request exceptions expose `.response?` (fields `status`, `title`, `detail`, `type`, `instance`).
-
-**Fix:** Branch on the specific subclasses, fall through to `MonoCloudRequestException` for the problem-details payload, then `MonoCloudException` as the absolute base:
-
-```ts
-import {
-  MonoCloudConflictException,
-  MonoCloudIdentityValidationException,
-  MonoCloudNotFoundException,
-  MonoCloudRequestException,
-  MonoCloudException,
-} from "@monocloud/management";
-
-try {
-  await client.users.createUser(req);
-} catch (e) {
-  if (e instanceof MonoCloudConflictException) return "duplicate";
-  if (e instanceof MonoCloudIdentityValidationException) return { errors: e.errors };
-  if (e instanceof MonoCloudNotFoundException) return null;
-  if (e instanceof MonoCloudRequestException) {
-    // .response is the parsed problem+json body (when the server sent one)
-    logger.error({ status: e.response?.status, title: e.response?.title }, "Management call failed");
-  } else if (e instanceof MonoCloudException) {
-    // config error, timeout, or "Something went wrong." (network/parse)
-    logger.error({ message: e.message }, "Management call failed (no HTTP response)");
-  }
-  throw e;
-}
-```
-
-## Only the first page of results
-
-**Symptom:** `getAllUsers()` returns a small slice when you know there are far more records.
-
-**Cause:** `getAll*` methods return **one page**. `page`/`size` have no client-side defaults — when omitted they are dropped from the query string and the server applies its own (small) page size. You have to iterate using `pageData.has_next`.
-
-**Fix:**
-
-```ts
-let page = 1;
-for (;;) {
-  const { result, pageData } = await client.users.getAllUsers(page, 100);
-  for (const u of result) handle(u);
-  if (!pageData.has_next) break;
-  page += 1;
-}
-```
-
-Note a handful of list methods are **non-paginated** and return `MonoCloudResponse<T[]>` (no `pageData`): `clients.getAllApplicationSecrets`, `resources.getAllApiResourceSecrets`, `options.getAllSignUpCustomFields`, `options.getAllExternalAuthenticators`, `trustStores.getAllPkiBannedCertificates`, `trustStores.getAllSpiffeBannedSvids`. Don't reach for `pageData` on those.
-
-## Reading `.data` instead of `.result`
-
-**Symptom:** `res.data` is `undefined`; TypeScript reports no `data` property on `MonoCloudResponse`.
-
-**Cause:** `.data` / `.pageData` are the **.NET** SDK's field names. In the JS/TS SDK the deserialized body is on `.result`, and `MonoCloudResponse` also carries `.status` and `.headers`. Empty responses (e.g. `deleteUser`) resolve to `MonoCloudResponse<null>` with `result === null`.
-
-**Fix:**
-
-```ts
-const res = await client.users.findUserById(id);
-res.result;   // User        (not res.data)
-res.status;   // number
-res.headers;  // Record<string, any>
-```
-
-## `timeout` interpreted wrong / not applied
-
-**Symptom:** Calls abort long before / after the value you set, or your `MONOCLOUD_MANAGEMENT_TIMEOUT` seems ignored.
-
-**Cause:** Two things. First, `config.timeout` is in **milliseconds** (default `10000`), and people reach for seconds out of habit. Second, `init()`'s env-var wiring uses a quirky ternary, so `MONOCLOUD_MANAGEMENT_TIMEOUT` doesn't reliably reach the fetcher.
-
-**Fix:** Pass the timeout explicitly in `options.config`, in milliseconds:
-
-```ts
-MonoCloudManagementClient.init({ config: { timeout: 30_000 } }); // 30s
-```
-
-A timeout surfaces as a base `MonoCloudException` (there is no dedicated timeout class); the underlying error's `name === 'TimeoutError'` and its message is forwarded.
-
-## TypeScript error: identifier field not on a `Patch…Request`
-
-**Symptom:** A patch call fails type-checking on a field like `audience` (`PatchApiResourceRequest`) or `name` (`PatchApiScopeRequest`, `PatchScopeRequest`, `PatchClaimResourceRequest`) — "Object literal may only specify known properties".
-
-**Cause:** Those identifier fields are simply **not part of the `Patch…Request` interfaces** in this SDK — you cannot change them via a patch. In v0.2.11, for example, `PatchApiResourceRequest` exposes `display_name` and `allow_multi_audience` but no `audience`, and the scope/claim patch types expose `display_name` but no `name`. Older code (or stale training data) treats them as updatable.
-
-**Fix:** Drop the identifier from the patch body and send only mutable fields:
-
-```ts
-// ❌ does not compile — `name` is not a patchable field
-await client.resources.patchApiScope(scopeId, apiId, { name: "new-name", display_name: "New" });
-
-// ✅ patch mutable fields only
-await client.resources.patchApiScope(scopeId, apiId, { display_name: "New" });
-```
-
-To change an immutable identifier, delete and recreate the resource. Which specific fields are patchable is defined by each `Patch…Request` type — trust the type, and consult <https://www.monocloud.com/docs> rather than assuming a field is settable.
-
-## Call rejected because of the subscription tier (402)
-
-**Symptom:** A method that exists on the typed client — `networkZones.createIpNetworkZone`, `users.getAllUserConsents`, `groups.createGroup`, etc. — throws `MonoCloudPaymentRequiredException`. Or setting a gated property (e.g. a consent field on `PatchApplicationRequest`) is rejected.
-
-**Cause:** Many features are subscription-tier-gated even though the SDK surface is identical for every tenant. The server enforces the gate with HTTP **402**, which the SDK maps to `MonoCloudPaymentRequiredException`. There is no client-side enforcement and no env-var override.
-
-**Method-level gates:**
-
-| Tier | Gated methods |
-| --- | --- |
-| ScaleX | `clients.assignGroupToApplication` / `removeGroupFromApplication`; `networkZones.createIpNetworkZone` / `patchIpNetworkZone` / `createRegionalNetworkZone` / `patchRegionalNetworkZone`; `resources.createApiResourceSecret` |
-| Pro | `groups.createGroup` (only beyond two groups); `users.getAllUserSessions` / `findUserSession` / `revokeUserSession`; `users.getAllUserClientGrants` |
-| Secure+ | `users.getAllUserConsents` / `getAllReferenceTokens` / `getAllRefreshTokens` / `getAllAuthorizationCodes` and the matching `revoke*` methods |
-
-**Field-level gates** (properties you may set in create/patch requests): Secure+ covers consents, JWT request objects (JAR), Pushed Authorization Requests (PAR), back-channel logout; Pro covers authenticator restrictions, front-channel logout, sign-up restrictions; ScaleX covers UserInfo access, multi-audience tokens, long refresh-token lifetimes, API secret generation, reference tokens, and session binding.
-
-**Fix:** Confirm the tenant's tier before wiring these features. Catch `MonoCloudPaymentRequiredException` (or read `.response?.detail`) and surface a clear upgrade message — the only remedy is upgrading the plan.
-
-## Older training-data SDK ghosts
-
-**Symptom:** Code references `MonoCloudClient` (singular), a `.managementApi` property, `new MonoCloudManagementClient(...)`, or method names like `listUsers` / `getUsers`. None of these exist.
-
-**Cause:** The agent is pattern-matching a different or imagined SDK.
-
-**Fix:** The real entry point is the static factory `MonoCloudManagementClient.init(...)`; ten resource clients hang off it — `branding`, `clients`, `groups`, `keys`, `logs`, `networkZones`, `options`, `resources`, `trustStores`, `users` (both `networkZones` and `trustStores` are camelCase). Method names follow the SDK convention (`getAllUsers`, `findUserById`, `createUser`, `patchPrivateData`, `disableUser`, `createIpNetworkZone`). Watch two naming quirks: the `clients` accessor / `ClientsClient` uses **`Application`** models and methods (`getAllApplications`, `createApplication`, `PatchApplicationRequest`) while the path param stays `clientId`; and several `ResourcesClient` secret/scope methods take the **child id first** (`findApiScopeById(scopeId, apiId)`, `patchApiScope(scopeId, apiId, body)`, `findApiResourceSecretById(secretId, apiId)`). Check [`api-surface.md`](api-surface.md) before writing a call.
+`MonoCloudClient`, `.managementApi`, `users.listUsers()` / `getUser()` / `updateUser()`, `clients.getAllClients()`, `logs.getLogs()`, `stream*` / `subscribe*` / `watch*` methods — none exist. The entry point is `MonoCloudManagementClient.init()`; the `clients` accessor uses `Application` names; there is no public streaming API. Look methods up in [`api-surface.md`](api-surface.md); the diagnostic below flags unknown resource-client calls.
 
 ## Diagnostic
 
 ```bash
-node skills/monocloud-management-js/scripts/verify.js [project-dir]
+node scripts/verify.js [project-dir]
 ```
 
-Checks that `@monocloud/management` is in `package.json`, that the env vars are set, that `MONOCLOUD_MANAGEMENT_DOMAIN` doesn't contain `/api`, and that `MONOCLOUD_MANAGEMENT_TIMEOUT` (if set) is a positive integer. It also warns when a browser/auth SDK or frontend framework is present (the admin key must stay server-side) and when source reads `.data` instead of `.result`.
+Run from the skill directory ([`scripts/verify.js`](../scripts/verify.js)). It checks the dependency, required env vars, the domain format, `MONOCLOUD_MANAGEMENT_TIMEOUT` parsing, public-prefixed or client-side use of the key, `new MonoCloudManagementClient(…)`, core-only imports, `.data` / `.PageData` reads, and calls to methods that don't exist on a resource client.

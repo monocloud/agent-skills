@@ -52,6 +52,7 @@ else if (deps['@monocloud/auth-web-js']) { skill = 'monocloud-web-js'; note('pac
 else if (deps['@monocloud/management']) { skill = 'monocloud-management-js'; note('package.json declares @monocloud/management'); }
 else if (deps['@monocloud/backend-node'] && deps.fastify && !deps.express) { skill = 'monocloud-auth-fastify'; note('@monocloud/backend-node + fastify detected'); }
 else if (deps['@monocloud/backend-node'] && deps.express) { skill = 'monocloud-auth-express'; note('@monocloud/backend-node + express detected'); }
+else if (deps['@monocloud/backend-node']) { skill = 'monocloud-auth-express'; note('@monocloud/backend-node without Express/Fastify — use the framework-agnostic MonoCloudBackendNodeClient (root export) section of monocloud-auth-express'); }
 // Framework-only signals (SDK not installed yet).
 else if (deps.next) { skill = 'monocloud-auth-nextjs'; note('Next.js detected via "next" dep'); }
 else if (deps.fastify && !deps.express) { skill = 'monocloud-auth-fastify'; note('Fastify detected via "fastify" dep'); }

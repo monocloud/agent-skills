@@ -1,45 +1,25 @@
 ---
 name: monocloud-auth-aspnetcore
-description: Use when validating MonoCloud access tokens in an ASP.NET Core API / resource server — installing or configuring the `MonoCloud.Authentication.Api` NuGet package, wiring `AddAuthentication(...).AddMonoCloudAuthentication(...)` and the `"MonoCloud"` scheme, setting `MonoCloudAuthenticationOptions` (`Authority`, `Audience`, `ClientId`, `ClientAuth`), validating JWT vs opaque (RFC 7662 introspection) bearer tokens, enforcing scope/group authorization via standard `[Authorize(Policy=…)]` / `RequireClaim` policies, caching introspection results with a singleton `IIntrospectionCache`, mTLS certificate-bound tokens (`ValidateCertificateBinding` / `CertificateBindingValidation` — `WhenPresent`/`Required`/`DangerouslyIgnore` — `cnf` / `x5t#S256`), picking a client-auth method (`client_secret_basic`/`client_secret_post`/`client_secret_jwt`/`private_key_jwt`/`tls_client_auth`/`spiffe_jwt`/`spiffe_x509`), or troubleshooting 401/403 / `MapInboundClaims` / `IIntrospectionCache not found` errors.
+description: Use when validating MonoCloud access tokens in ASP.NET Core APIs — installing or configuring the `MonoCloud.Authentication.Api` NuGet package, wiring `AddAuthentication(...).AddMonoCloudAuthentication(...)` and the `"MonoCloud"` scheme, setting `MonoCloudAuthenticationOptions` (`Authority`, `Audience`, `ClientId`, `ClientAuth`, `RoleClaimType`, `IntrospectJwtTokens`), JWT vs opaque (RFC 7662 introspection) tokens, scope/group authorization via standard `[Authorize(Policy=…)]` / `RequireClaim` policies, caching introspection with a singleton `IIntrospectionCache`, mTLS certificate-bound tokens (`ValidateCertificateBinding` = `CertificateBindingValidation.WhenPresent`/`Required`/`DangerouslyIgnore`, `cnf` / `x5t#S256`), client-auth methods (`client_secret_basic`/`client_secret_post`/`client_secret_jwt`/`private_key_jwt`/`tls_client_auth`/`spiffe_jwt`/`spiffe_x509`), or troubleshooting 401/403/500s, `MapInboundClaims`, `Token inactive`, or `IIntrospectionCache not found`.
 license: MIT
 ---
 
 # MonoCloud ASP.NET Core API authentication (`MonoCloud.Authentication.Api`)
 
-.NET SDK for validating MonoCloud-issued **access tokens** in ASP.NET Core APIs and resource servers. It ships as a standard ASP.NET Core **authentication handler / scheme** that **extends `JwtBearerHandler`** (`MonoCloudAuthenticationOptions : JwtBearerOptions`, `MonoCloudAuthenticationEvents : JwtBearerEvents`), so the whole `AddJwtBearer` option and event surface applies — the standard events even fire on the opaque path — and it plugs directly into `AddAuthentication()`, `[Authorize]`, and the authorization policy system. It validates JWTs locally against the tenant signing keys and introspects opaque (reference) tokens via RFC 7662, auto-detecting which.
+Validates MonoCloud-issued **access tokens** in ASP.NET Core APIs and resource servers. It is a standard authentication **scheme** whose handler extends `JwtBearerHandler` (`MonoCloudAuthenticationOptions : JwtBearerOptions`, `MonoCloudAuthenticationEvents : JwtBearerEvents`), so the whole `AddJwtBearer` option and event surface applies, and it plugs into `UseAuthentication()`, `[Authorize]` and authorization policies. JWTs are validated locally against the tenant's signing keys; opaque (reference) tokens are introspected (RFC 7662). The format is detected per request.
 
 ## Package identity — read this first
 
-**Use:** the `MonoCloud.Authentication.Api` NuGet package. Check `*.csproj` before writing code — confirm `<PackageReference Include="MonoCloud.Authentication.Api" ... />` is present and note its version. The package id, assembly name, and root namespace are all `MonoCloud.Authentication.Api`.
+- **Install `MonoCloud.Authentication.Api`** (NuGet). Package id, assembly and root namespace are the same. Check `*.csproj` for `<PackageReference Include="MonoCloud.Authentication.Api" … />` before writing code.
+- **Targets `net8.0`, `net9.0`, `net10.0`** — the API project must target `net8.0` or later. The matching `Microsoft.AspNetCore.Authentication.JwtBearer` comes in transitively; don't add it yourself.
+- **Different packages:** `MonoCloud.Management` calls the Management API (`monocloud-management-dotnet` skill); `@monocloud/backend-node` with `protectApi()` is the Node SDK (`monocloud-auth-express` / `monocloud-auth-fastify`). `@monocloud/authentication-api` is a private release-tooling name in the SDK repo, not an installable package.
+- **These do not exist — never emit them:** `AddMonoCloud()`, `UseMonoCloud()` / `UseMonoCloudAuthentication()` middleware, `[MonoCloudAuthorize]`, `MonoCloud.AspNetCore.Authentication`, `MonoCloudJwtBearer`, `options.TenantDomain` (use `Authority`), `options.ClientSecret` (use `ClientAuth = new ClientSecretAuth(…)`), `JwtTokenValidationParameters` (use `TokenValidationParameters`), `MONOCLOUD_*` environment variables. The SDK reads no environment variables; configure it through the options action or `IConfiguration`.
 
-Three intentional, distinct naming axes — do not conflate them:
-
-- **NuGet id / assembly / namespace:** `MonoCloud.Authentication.Api` (what you install and `using`).
-- **GitHub repo:** `monocloud/api-authentication-dotnet`.
-- **Changesets/npm tooling name:** `@monocloud/authentication-api` (a repo-internal release-tooling name only — it is **not** installable and never appears in app code).
-
-This is **not**:
-
-- A middleware you hand-write. It is an authentication **scheme** you register via `AddMonoCloudAuthentication(...)`; the framework's `UseAuthentication()` runs it. There is no `app.UseMonoCloud()` middleware to author.
-- `MonoCloud.Management` (the admin/Management API client — different skill, `monocloud-management-dotnet`).
-- The Node backend SDK. There is **no** `protectApi()` factory, no `[MonoCloudAuthorize]` attribute, and no scope/group option bag here — authorization is done with the **standard ASP.NET Core policy system** (see [Authorization](#authorization--scopes--groups)).
-
-Stale-training-data guards — none of these exist; do not emit them:
-
-- No `MonoCloud.AspNetCore.Authentication`, `AddMonoCloud()`, `UseMonoCloudAuthentication()`, or `MonoCloudJwtBearer` types. The DI entry point is `AddMonoCloudAuthentication(...)` on `AuthenticationBuilder`.
-- The SDK reads **no** environment variables of its own (no `MONOCLOUD_*` fallback). All config flows through the options action or `IConfiguration` binding of `MonoCloudAuthenticationOptions`.
-
-## Installation
+## Install and register
 
 ```bash
 dotnet add package MonoCloud.Authentication.Api
 ```
-
-Target frameworks: **`net8.0`, `net9.0`, `net10.0`** (supported platforms `>= .NET 8.0`). The `net6.0` and `net7.0` targets were dropped in 0.1.3. The correct `Microsoft.AspNetCore.Authentication.JwtBearer` version is pulled in per-TFM automatically.
-
-## Registration
-
-Register the scheme on the `AuthenticationBuilder`, then add the two framework middleware in order — `UseAuthentication()` **before** `UseAuthorization()`, both after routing:
 
 ```csharp
 using System.Security.Claims;
@@ -52,352 +32,283 @@ builder.Services
     .AddMonoCloudAuthentication(options =>
     {
         options.Authority = builder.Configuration["MonoCloud:Authority"]; // tenant domain, e.g. https://acme.us.monocloud.com
-        options.Audience  = builder.Configuration["MonoCloud:Audience"];  // your API identifier
+        options.Audience  = builder.Configuration["MonoCloud:Audience"];  // the API's audience identifier
     });
 
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
-app.UseAuthentication();
+app.UseAuthentication(); // then UseAuthorization; both after UseRouting() if you call it explicitly
 app.UseAuthorization();
 
-app.MapGet("/api/me", (ClaimsPrincipal user) => $"Hello {user.Identity?.Name}")
+app.MapGet("/api/protected", (ClaimsPrincipal user) =>
+        user.Claims.Select(c => new { c.Type, c.Value }))
    .RequireAuthorization();
 
 app.Run();
 ```
 
-`MonoCloudAuthenticationDefaults.AuthenticationScheme` is the constant `"MonoCloud"`. The SDK also registers a named `IHttpClientFactory` client `MonoCloudAuthenticationDefaults.HttpClientName` (`"MonoCloud.AspNetCore.HttpClient"`) used for discovery + introspection.
+`AddMonoCloudAuthentication` hangs off `AuthenticationBuilder` with four overloads: `()`, `(string authenticationScheme)`, `(Action<MonoCloudAuthenticationOptions> configureOptions)`, `(string authenticationScheme, Action<MonoCloudAuthenticationOptions>? configureOptions)`. Without a scheme argument it registers `"MonoCloud"`. Registering the same scheme name twice throws `InvalidOperationException` ("Scheme already exists").
 
-### The four `AddMonoCloudAuthentication` overloads
+Namespaces:
 
-All hang off `AuthenticationBuilder` (the return of `AddAuthentication(...)`) and all funnel into the last one:
-
-| Overload | Use |
-| --- | --- |
-| `AddMonoCloudAuthentication()` | Default scheme `"MonoCloud"`, no options action (configure later via `IConfiguration` binding / `PostConfigure`). |
-| `AddMonoCloudAuthentication(string authenticationScheme)` | Custom scheme name, no options action. |
-| `AddMonoCloudAuthentication(Action<MonoCloudAuthenticationOptions> configureOptions)` | Default scheme `"MonoCloud"` + options action. |
-| `AddMonoCloudAuthentication(string authenticationScheme, Action<MonoCloudAuthenticationOptions>? configureOptions)` | Core overload — custom scheme + optional options action. |
-
-> Do not hardcode secrets. Load `Authority`, `ClientId`, and any client secret from `IConfiguration` (User Secrets locally, a secret manager in production).
+- `MonoCloud.Authentication.Api` — registration, options, events, `CertificateBindingValidation`
+- `.Shared` — `IIntrospectionCache`, `JwtAssertion`
+- `.Shared.ClientAuth` — client-auth types
+- `.Shared.Context` — MonoCloud event contexts
 
 ## Configuration
 
-`MonoCloudAuthenticationOptions : JwtBearerOptions`. Because it derives from `JwtBearerOptions`, the **entire `AddJwtBearer` option surface applies** — `Authority`, `Audience`, `TokenValidationParameters`, `SaveToken`, `MapInboundClaims`, `IncludeErrorDetails`, `RequireHttpsMetadata`, `MetadataAddress`, `Challenge`, `RefreshOnIssuerKeyNotFound`, `AutomaticRefreshInterval`, `RefreshInterval`, `Backchannel`, `Configuration`, `ConfigurationManager`, `Events` — and behaves as it does for a plain JWT bearer scheme. Set it in the options action or bind it from `IConfiguration`. The most-used options:
+Every `JwtBearerOptions` member applies. These are the ones that matter:
 
-| Option | Type / default | Purpose |
+| Option | Type, default | Notes |
 | --- | --- | --- |
-| `Authority` (inherited) | `string?` = `null` | Tenant domain / authority + expected issuer. Discovery is `Authority + "/.well-known/openid-configuration"`. A scheme-less value is prefixed with `https://` during post-configuration; an explicit `http://` is honored (pair with `RequireHttpsMetadata = false` for dev). Required on both paths. **Replaces the removed `TenantDomain`.** |
-| `Audience` (inherited) | `string?` = `null` | Expected token audience. Post-configuration copies it into `TokenValidationParameters.ValidAudience`. |
-| `ClientId` | `string?` = `null` | OAuth client id. Required for introspection and by every `ClientAuth`; not needed for pure local-JWT validation. |
-| `ClientAuth` | `IMonoCloudClientAuth?` = `null` | How the API authenticates itself on the introspection request. Required (non-null) on the opaque path. |
-| `IntrospectJwtTokens` | `bool` = `false` | When `true`, even JWT-parseable tokens go through introspection (forces the opaque path for all tokens). |
-| `NameClaimType` | `string?` = `null` | Claim used as `Identity.Name`. Applied to `TokenValidationParameters.NameClaimType`. |
-| `RoleClaimType` | `string?` = `null` | Claim treated as roles **and** as the group claim expanded by group normalization (set to `"groups"` to enable group policies). |
-| `ClockSkew` | `TimeSpan?` = `null` | Applied to `TokenValidationParameters.ClockSkew`. `null` ⇒ framework default (5 min), **not** zero. |
-| `EnableCaching` | `bool` = `false` | Read/write introspection results through a registered `IIntrospectionCache`. |
-| `CacheDuration` | `TimeSpan` = 5 min | Max cache TTL. |
-| `CacheKeyPrefix` | `string` = `""` | Prefix on every generated cache key. |
-| `ValidateCertificateBinding` | `CertificateBindingValidation` = `WhenPresent` | Certificate-binding mode (an **enum** as of 0.1.5 — it was a `Func<HttpContext,bool>` defaulting to `_ => false`). `WhenPresent` (default) validates only when the token's `cnf` claim carries an `x5t#S256` member; `Required` always validates, rejecting tokens with no `cnf`; `DangerouslyIgnore` never validates. An undefined enum value throws `ArgumentException` at post-configure. |
-| `CertificateRetriever` | `Func<HttpContext,Task<X509Certificate2?>>` | How the client cert is obtained (default `Connection.GetClientCertificateAsync()`). Invoked only when the mode gate actually validates; return `null` when no cert is present. A throw is a **binding verdict** — 401 `invalid_token`, `Client certificate is malformed` (0.1.5). |
-| `Events` | `MonoCloudAuthenticationEvents` (`: JwtBearerEvents`) | Event hooks (see [Events](#events)). |
-| `SaveToken` (inherited) | `bool` = **`true`** | Store the raw access token as an `AuthenticationToken` named `"access_token"`. |
-| `MapInboundClaims` (inherited) | `bool` = **`true`** | Maps JWT claim types to legacy WS-* URIs on the JWT path (see [Accessing the user](#accessing-the-authenticated-user)). |
-| `IncludeErrorDetails` (inherited) | `bool` = **`true`** | Includes `error_description` in the RFC 6750 `WWW-Authenticate` challenge on a 401. |
-| `TokenValidationParameters` (inherited) | `TokenValidationParameters` | Full `Microsoft.IdentityModel` JWT-path validation parameters. **Replaces the removed `JwtTokenValidationParameters`.** |
-| `Configuration` / `ConfigurationManager` (inherited) | `null` | Pre-supplied OIDC metadata / metadata manager. If both `null`, discovery is built from `Authority`. |
+| `Authority` *(inherited)* | `string?`, `null` | Tenant domain: the issuer and discovery base (`{Authority}/.well-known/openid-configuration`). A value without `://` gets `https://` prepended. `http://` also needs `RequireHttpsMetadata = false` (dev only). Required for introspection. |
+| `Audience` *(inherited)* | `string?`, `null` | Expected `aud` for JWTs. Copied to `TokenValidationParameters.ValidAudience` unless that is already set. |
+| `ClientId` | `string?`, `null` | Required on the introspection path. Not used for local JWT validation. |
+| `ClientAuth` | `IMonoCloudClientAuth?`, `null` | How the API authenticates to the introspection endpoint. Required on the introspection path. See [Client authentication](#client-authentication). |
+| `IntrospectJwtTokens` | `bool`, `false` | Send JWTs to introspection too, for a server-side revocation check instead of local validation. |
+| `RoleClaimType` | `string?`, `null` | Role claim type on both paths. Set `"groups"` for MonoCloud groups (see [Authorization](#authorization--scopes-and-groups)). |
+| `NameClaimType` | `string?`, `null` | Claim used for `Identity.Name` on both paths. |
+| `MapInboundClaims` *(inherited)* | `bool`, `true` | JWT path only: renames claim types such as `sub` → `ClaimTypes.NameIdentifier`. Introspected claims are never renamed. See [Reading claims](#reading-claims). |
+| `EnableCaching` / `CacheDuration` / `CacheKeyPrefix` | `bool` `false` / `TimeSpan` 5 min / `string` `""` | Introspection-result caching. See [Caching](#caching-introspection-results). |
+| `ValidateCertificateBinding` | `CertificateBindingValidation`, `WhenPresent` | Certificate-bound tokens. See [mTLS binding](#mtls-certificate-bound-tokens). |
+| `CertificateRetriever` | `Func<HttpContext, Task<X509Certificate2?>>`, `Connection.GetClientCertificateAsync()` | Supplies the caller's client certificate for binding checks. |
+| `ClockSkew` | `TimeSpan?`, `null` | Copied to `TokenValidationParameters.ClockSkew` when set. `null` leaves that value alone (5 min by default). |
+| `SaveToken` / `IncludeErrorDetails` *(inherited)* | `bool`, `true` / `true` | Store the raw token as `access_token`. Put `error` / `error_description` in the 401 challenge. |
 
-Advanced MonoCloud-declared options: `JwtAssertionDuration`, `JwtAssertionSigningAlgorithm`, `AuthenticationType`, `CacheKeyGenerator`, `HttpClient`. Inherited extras: `RefreshOnIssuerKeyNotFound` (default **`true`**), `AutomaticRefreshInterval`, `RefreshInterval`, `RequireHttpsMetadata` (default `true`) — see [`references/api-surface.md`](references/api-surface.md).
+Other declared options (`AuthenticationType`, `CacheKeyGenerator`, `JwtAssertionDuration`, `JwtAssertionSigningAlgorithm`, `HttpClient`, `Events`) and how they map onto `JwtBearerOptions` are listed in [`references/api-surface.md`](references/api-surface.md#monocloudauthenticationoptions).
 
-### Binding from `appsettings.json` / `IConfiguration`
-
-Because `MonoCloudAuthenticationOptions` is a plain options class, you can bind simple values from configuration inside the action. The SDK does not read env vars itself, but `IConfiguration` surfaces them through the standard ASP.NET Core mapping (`MonoCloud__Authority`, etc.).
+Simple values bind from `IConfiguration`, which also lets environment variables in through the usual providers (e.g. `MonoCloud__Authority`). `ClientAuth` is an object and is set in code:
 
 ```json
-{
-  "MonoCloud": {
-    "Authority": "https://acme.us.monocloud.com",
-    "Audience": "https://api.example.com",
-    "ClientId": "your-client-id"
-  }
-}
+{ "MonoCloud": { "Authority": "https://acme.us.monocloud.com", "Audience": "https://api.example.com", "ClientId": "<client-id>" } }
 ```
 
 ```csharp
 .AddMonoCloudAuthentication(options =>
 {
     builder.Configuration.GetSection("MonoCloud").Bind(options);
-    // ClientAuth is not bindable from config — set it in code:
-    options.ClientAuth = new ClientSecretAuth(builder.Configuration["MonoCloud:ClientSecret"]!);
+    options.ClientAuth = new ClientSecretAuth(builder.Configuration["MonoCloud:ClientSecret"]!); // secret from User Secrets / a vault
 });
 ```
 
 ## JWT vs opaque tokens
 
-The handler auto-detects the token format per request:
+| | JWT path | Introspection (opaque) path |
+| --- | --- | --- |
+| Used for | compact JWTs while `IntrospectJwtTokens` is `false` | every other token, or all tokens when `IntrospectJwtTokens = true` |
+| Validation | base `JwtBearerHandler`: signature (discovery JWKS), issuer, `Audience`, lifetime | POST to the discovery `introspection_endpoint`; response must be `"active": true`. `Audience` is not compared, so add a `RequireClaim("aud", …)` policy if needed. |
+| Requires | `Authority`, `Audience` | `Authority`, `ClientId`, `ClientAuth` |
+| Per-request network | none once discovery and keys are cached | one introspection call, unless cached or shared with a concurrent identical request |
 
-- **JWT path** (`!IntrospectJwtTokens` and the token parses as a JWT): validated **locally** by the base `JwtBearerHandler` against the tenant's discovery signing keys + the inherited `TokenValidationParameters`. No per-request network call once discovery is cached. Needs only `Authority` (issuer) and `Audience` — **no** `ClientId`/`ClientAuth`.
-- **Opaque path** (reference tokens, or any token when `IntrospectJwtTokens = true`): validated by calling the OIDC **introspection** endpoint (RFC 7662). **Requires** `Authority` + `ClientId` + `ClientAuth` — each throws `ArgumentNullException` at request time if missing.
+Outcomes:
 
-Set `IntrospectJwtTokens = true` only when you specifically need server-side revocation checks on JWTs; it adds an introspection round-trip to every request.
+- **No bearer token** → anonymous (`NoResult`). `[Authorize]` then challenges with 401 `WWW-Authenticate: Bearer`.
+- **Token verdicts** → 401 `Bearer error="invalid_token"`. These are an invalid or expired JWT, `Token inactive` (`active: false`), and certificate-binding failures. The reason is in `OnAuthenticationFailed` → `context.Exception.Message`. The challenge only carries `error_description` for the framework's own JWT errors (expiry, audience, issuer, signature).
+- **Introspection-path infrastructure failures** → the exception propagates (500). These are a missing `ClientId` / `Authority` / `ClientAuth` (`ArgumentNullException`), discovery/HTTP errors or non-2xx responses (`HttpRequestException`), malformed JSON (`JsonException`), client-auth errors, and exceptions from your own event handlers. Setting `context.Result` in `OnAuthenticationFailed` replaces the 500, except for the missing `ClientId` / `Authority` checks, which run before that event.
 
-## Authorization — scopes & groups
+## Authorization — scopes and groups
 
-There is **no MonoCloud-specific authorization API**. The handler only authenticates and turns token data into claims; you enforce requirements with the **standard ASP.NET Core policy system** (`AddAuthorization` / policies / `[Authorize(Policy=…)]` / `RequireClaim`). (Contrast the Node Express/Fastify SDK, which uses a `protectApi({ scopes, groups })` factory — that does not exist here.)
+There is no MonoCloud-specific authorization API. Use `AddAuthorization` policies, `[Authorize(Policy = …)]`, `.RequireAuthorization(…)` and `RequireClaim`.
 
-**How scopes become claims.** On the **opaque/introspection** path the `scope` response value (space-delimited string *or* JSON array) is split into **one `"scope"` claim per value**, so `RequireClaim("scope", "read:weather")` matches directly. On the **JWT** path a space-delimited `scope` is now split the same way (aligned in 0.1.4), so `RequireClaim("scope", "read:weather")` matches per-value on both paths — no custom requirement needed.
-
-**How groups become claims.** Groups arrive under the token's group claim (MonoCloud uses `groups`). To have them expanded you **must** set `options.RoleClaimType = "groups"`. Group normalization then runs (on the opaque path it runs **only if `RoleClaimType` is non-null**) and expands a JSON-array group claim into individual claims: a string array becomes one claim per string; an array of `{id,name}` objects becomes **two** claims per group (one carrying the id, one the name) — so a policy can match either. Because `RoleClaimType` is the identity's role claim type, `[Authorize(Roles=…)]` and `User.IsInRole(...)` also work against groups.
+- **Scopes** become one `scope` claim per value on both paths, whether the token has a space-delimited string or an array. So `RequireClaim("scope", "read:weather")` works directly.
+- **Groups** arrive in the `groups` claim as strings and/or `{ "id", "name" }` objects, and each entry becomes its own `groups` claim. Set `options.RoleClaimType = "groups"` for two effects:
+  - Each object expands into two claims, its id and its name. Without this setting an object stays a raw JSON string that no policy matches.
+  - Groups count as roles for `[Authorize(Roles = …)]`, `RequireRole` and `User.IsInRole`.
 
 ```csharp
 builder.Services.AddAuthentication(MonoCloudAuthenticationDefaults.AuthenticationScheme)
     .AddMonoCloudAuthentication(options =>
     {
         options.Authority = builder.Configuration["MonoCloud:Authority"];
-        options.Audience  = builder.Configuration["MonoCloud:Audience"];
-        options.RoleClaimType = "groups"; // required so groups expand + role/group policies work
+        options.Audience = builder.Configuration["MonoCloud:Audience"];
+        options.RoleClaimType = "groups";
     });
 
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("read:weather", p => p.RequireClaim("scope", "read:weather"));
-    options.AddPolicy("admins",       p => p.RequireClaim("groups", "admin")); // matches RoleClaimType
+    options.AddPolicy("admins", p => p.RequireClaim("groups", "admin")); // group id or name
 });
+
+app.MapGet("/weather", () => "…").RequireAuthorization("read:weather");
+// Controllers: [Authorize(Policy = "read:weather")], [Authorize(Roles = "admin")]
 ```
 
-Then require them: `[Authorize(Policy = "read:weather")]` on controllers/actions, or `.RequireAuthorization("read:weather")` on minimal-API endpoints. `[Authorize]` / `.RequireAuthorization()` with no policy just requires an authenticated principal from the scheme.
+`[Authorize]` or `.RequireAuthorization()` without a policy only requires an authenticated principal. Set `RoleClaimType` / `NameClaimType` on the MonoCloud options, not on `TokenValidationParameters`, because the introspection path reads only the options.
 
-## Client authentication methods
+## Client authentication
 
-Set `options.ClientAuth` to one of these when the API must authenticate itself on the introspection request (opaque path). All except the SPIFFE-fixed-SVID case require `options.ClientId`. Types live in `MonoCloud.Authentication.Api.Shared.ClientAuth`.
+`ClientAuth` is required on the introspection path (opaque tokens, or `IntrospectJwtTokens = true`), always together with `options.ClientId`. The types are in `MonoCloud.Authentication.Api.Shared.ClientAuth`.
 
-| Type | client_auth method | Constructor |
-| --- | --- | --- |
-| `ClientSecretAuth` | `client_secret_post` (default) / `client_secret_basic` | `ClientSecretAuth(string clientSecret, bool clientSecretBasic = false)` |
-| `JwtAssertionAuth` | `client_secret_jwt` (symmetric) / `private_key_jwt` (asymmetric) | `JwtAssertionAuth(string clientSecret)` · `JwtAssertionAuth(JsonWebKey jwk)` · `JwtAssertionAuth(X509Certificate2 certificate)` |
-| `TlsAuth` | `tls_client_auth` (mutual TLS, RFC 8705) | `TlsAuth(X509Certificate2? certificate = null, string? trustStore = null)` |
-| `SpiffeJwtAuth` | `spiffe_jwt` (JWT-SVID forwarded as client assertion) | `SpiffeJwtAuth(string jwtSvid)` · `SpiffeJwtAuth(Func<HttpContext, CancellationToken, Task<string>> jwtSvidProvider)` |
-| `SpiffeX509Auth` | `spiffe_x509` (X.509-SVID over mTLS; behaves like `tls_client_auth`) | `SpiffeX509Auth(X509Certificate2? certificate = null, string? trustStore = null)` |
+| Method | `options.ClientAuth =` |
+| --- | --- |
+| `client_secret_post` | `new ClientSecretAuth(secret)` |
+| `client_secret_basic` | `new ClientSecretAuth(secret, clientSecretBasic: true)` |
+| `client_secret_jwt` | `new JwtAssertionAuth(secret)`, or `new JwtAssertionAuth(jwk)` with an `oct` key |
+| `private_key_jwt` | `new JwtAssertionAuth(certificate)`, or `new JwtAssertionAuth(jwk)` with an RSA/EC key |
+| `tls_client_auth` | `new TlsAuth(certificate, trustStore)` (both optional) |
+| `spiffe_jwt` | `new SpiffeJwtAuth(jwtSvid)` or `new SpiffeJwtAuth((httpContext, ct) => …)` |
+| `spiffe_x509` | `new SpiffeX509Auth(certificate, trustStore)` (both optional) |
+| custom | implement `IMonoCloudClientAuth.AuthenticateAsync(ClientAuthenticationContext, CancellationToken)` |
 
 ```csharp
-// Confidential client with a shared secret (the common case)
 options.ClientId = builder.Configuration["MonoCloud:ClientId"];
 options.ClientAuth = new ClientSecretAuth(builder.Configuration["MonoCloud:ClientSecret"]!);
-// client_secret_basic instead of the default client_secret_post:
-options.ClientAuth = new ClientSecretAuth(secret, clientSecretBasic: true);
-
-// Signed client assertion (private_key_jwt) from a certificate
-options.ClientAuth = new JwtAssertionAuth(new X509Certificate2("client.pfx", pfxPassword));
-
-// Mutual-TLS client auth — the cert proves client identity (no secret in the body)
-options.ClientAuth = new TlsAuth(new X509Certificate2("client.pfx", pfxPassword));
-
-// SPIFFE/SPIRE workload — resolve the rotated short-lived JWT-SVID per request
-options.ClientAuth = new SpiffeJwtAuth(async (ctx, ct) =>
-    await ctx.RequestServices.GetRequiredService<IWorkloadApi>().FetchJwtSvidAsync(ct));
 ```
 
-`JwtAssertionAuth` builds a signed client-assertion JWT (`iss`/`sub` = `ClientId`, `aud` = the **issuer identifier** from discovery, `jti`/`nbf`/`iat`/`exp` = now + `JwtAssertionDuration`); override the algorithm with `JwtAssertionSigningAlgorithm` or the assertion itself via the `OnCreatingJwtAssertion` event. `TlsAuth`/`SpiffeX509Auth` resolve the introspection endpoint from the discovery doc's `mtls_endpoint_aliases` (or a `trustStore`-specific `mtls_additional_endpoint_aliases` entry) and throw `InvalidOperationException` if that alias is absent; supplying a `certificate` makes the SDK build a dedicated cert-bearing `HttpClient`, otherwise attach the cert to `options.HttpClient`'s handler yourself. For a custom scheme, implement `IMonoCloudClientAuth.AuthenticateAsync(ClientAuthenticationContext, CancellationToken)`.
+- `JwtAssertionAuth` signs a fresh assertion for every introspection: `iss` and `sub` are `ClientId`, `aud` is the discovery issuer, and the lifetime is `JwtAssertionDuration` (default 5 min). The default algorithm is HS256 for a secret or `oct` key and RS256 otherwise. Set `JwtAssertionSigningAlgorithm` for EC keys (e.g. `SecurityAlgorithms.EcdsaSha256`).
+- `TlsAuth` / `SpiffeX509Auth` introspect at the discovery document's `mtls_endpoint_aliases.introspection_endpoint`. With a `trustStore` they use that trust store's entry under `mtls_additional_endpoint_aliases`. If the alias is missing they throw `InvalidOperationException`. Given a certificate (and no `options.HttpClient`), the SDK builds an `HttpClient` that presents it. Without one, attach the certificate yourself to the named client `MonoCloudAuthenticationDefaults.HttpClientName` or to `options.HttpClient`.
+- `SpiffeJwtAuth`'s provider runs on every introspection, so rotated JWT-SVIDs are picked up. Resolve your Workload API client from `httpContext.RequestServices`.
 
-## Claims caching
+## Caching introspection results
 
-Introspection is a per-request network call; cache its results by implementing `IIntrospectionCache` (namespace `MonoCloud.Authentication.Api.Shared`) — a raw string key/value store the SDK serializes claims JSON into and out of:
-
-```csharp
-public interface IIntrospectionCache
-{
-    Task<string?> GetAsync(string key, CancellationToken cancellationToken);
-    Task SetAsync(string key, string value, TimeSpan expiresIn, CancellationToken cancellationToken);
-    Task DeleteAsync(string key, CancellationToken cancellationToken); // consumer-only: evict early (e.g. on revocation)
-}
-```
-
-`DeleteAsync` (added in 0.1.3) is **never called by the SDK** — it lets you evict a cached entry before it expires (e.g. when a token is revoked), keyed via `options.CacheKeyGenerator`. Implement it, but the SDK's read/write path only uses `GetAsync`/`SetAsync`.
-
-**Register it as a singleton** (hard requirement — the post-configure step that discovers it is a singleton, so a scoped/transient registration fails DI scope validation). If `EnableCaching = true` and no `IIntrospectionCache` is registered, startup throws `ArgumentException("IIntrospectionCache not found in the services collection")`.
+Each opaque token costs one introspection call per request. To cache results, register a **singleton** `IIntrospectionCache` (`MonoCloud.Authentication.Api.Shared`). It's a string key/value store, and the SDK serializes the claims itself.
 
 ```csharp
-public sealed class MemoryIntrospectionCache : IIntrospectionCache
-{
-    private readonly IMemoryCache _cache;
-    public MemoryIntrospectionCache(IMemoryCache cache) => _cache = cache;
+using Microsoft.Extensions.Caching.Memory;
+using MonoCloud.Authentication.Api.Shared;
 
+public sealed class MemoryIntrospectionCache(IMemoryCache cache) : IIntrospectionCache
+{
     public Task<string?> GetAsync(string key, CancellationToken ct) =>
-        Task.FromResult(_cache.TryGetValue(key, out string? v) ? v : null);
+        Task.FromResult(cache.TryGetValue(key, out string? value) ? value : null);
 
     public Task SetAsync(string key, string value, TimeSpan expiresIn, CancellationToken ct)
     {
-        _cache.Set(key, value, expiresIn);
+        cache.Set(key, value, expiresIn);
         return Task.CompletedTask;
     }
 
     public Task DeleteAsync(string key, CancellationToken ct)
     {
-        _cache.Remove(key);
+        cache.Remove(key);
         return Task.CompletedTask;
     }
 }
+
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<IIntrospectionCache, MemoryIntrospectionCache>();
+// inside AddMonoCloudAuthentication(options => …):
+options.EnableCaching = true;
+options.CacheDuration = TimeSpan.FromMinutes(5);
 ```
+
+- **Registration.** It must be a singleton; a scoped registration fails DI scope validation. With `EnableCaching = true` and nothing registered, the first request through the scheme fails with `ArgumentException: IIntrospectionCache not found in the services collection`.
+- **What's cached.** Only introspected tokens; local JWT validations never are. Both active and inactive results are stored, so a cached inactive token fails without another call. A token revoked after it was cached keeps passing until its entry expires.
+- **TTL and key.** The TTL is `CacheDuration`, shortened to the token's remaining `exp`; already-expired tokens aren't stored. The key is `CacheKeyPrefix` + Base64(SHA-256(`"{scheme}|{token}"`)), so schemes never share entries.
+- **Errors and eviction.** Cache exceptions are logged and swallowed. A failed `GetAsync` falls back to live introspection, and a failed `SetAsync` doesn't fail the request. The SDK never calls `DeleteAsync`; call it yourself to evict early:
 
 ```csharp
-builder.Services.AddMemoryCache();
-builder.Services.AddSingleton<IIntrospectionCache, MemoryIntrospectionCache>(); // MUST be singleton
-
-// ...AddMonoCloudAuthentication(options =>
-options.EnableCaching  = true;
-options.CacheDuration  = TimeSpan.FromMinutes(5);
-options.CacheKeyPrefix = "api:";
+// inject IOptionsMonitor<MonoCloudAuthenticationOptions> optionsMonitor and IIntrospectionCache cache
+var o = optionsMonitor.Get(MonoCloudAuthenticationDefaults.AuthenticationScheme);
+await cache.DeleteAsync(o.CacheKeyGenerator(o, token), cancellationToken);
 ```
-
-A Redis adapter is identical — `GetAsync` reads the string, `SetAsync` writes it with `expiresIn` as the key TTL. Notes: **only introspection-validated tokens are cached** (opaque tokens, plus JWTs when `IntrospectJwtTokens = true`); locally validated JWTs are never cached. Both active and inactive results are cached (inactive short-circuits a re-introspection). The default key is `CacheKeyPrefix + Base64(SHA256("{SchemeName}|{token}"))` — the scheme discriminator means multiple schemes never share entries. TTL is `min(CacheDuration, time-until-token-exp)`. A thrown `GetAsync` is caught and logged, then the handler falls through to a live introspection; a failing `SetAsync` (cache write) is likewise swallowed and logged (as of 0.1.4) — a cache failure never fails an otherwise-successful request.
 
 ## mTLS certificate-bound tokens
 
-RFC 8705 sender-constrained tokens (`cnf` / `x5t#S256`) are validated according to `options.ValidateCertificateBinding`, a `CertificateBindingValidation` **enum** (as of **0.1.5** — it was a `Func<HttpContext, bool>` through 0.1.4). The mode is set once on the options; it is not a per-request predicate.
+`options.ValidateCertificateBinding` is a `CertificateBindingValidation` enum (namespace `MonoCloud.Authentication.Api`). It controls the RFC 8705 `cnf` / `x5t#S256` check, which runs the same way on JWT, introspected and cached results:
 
-| `CertificateBindingValidation` | Behavior |
+| Value | Validates |
 | --- | --- |
-| `WhenPresent` (**default**) | Validates only when the token's `cnf` (confirmation) claim carries an `x5t#S256` thumbprint member. A `cnf` confirming by another method (e.g. DPoP's `jkt`) is skipped; an unparseable `cnf` still validates and fails. |
-| `Required` | Always validates, rejecting a token that carries no `cnf` claim. |
-| `DangerouslyIgnore` | Never validates, even when the token carries a `cnf` claim. |
+| `WhenPresent` (default) | Tokens whose `cnf` claim has an `x5t#S256` member. A `cnf` using another method (e.g. DPoP `jkt`) is skipped. A `cnf` that can't be parsed is validated and fails. |
+| `Required` | Every token. Tokens without `cnf` are rejected. |
+| `DangerouslyIgnore` | Nothing, even when `cnf` is present. |
 
-**Migrating from 0.1.4.** The default now changes behavior: `cnf`-bearing tokens are validated out of the box (previously the default never validated). Replace `ValidateCertificateBinding = _ => true` with `CertificateBindingValidation.Required`, and use `CertificateBindingValidation.DangerouslyIgnore` to opt out entirely. Any delegate assignment no longer compiles.
+It is a setting, not a per-request predicate. Assigning a delegate (`_ => true`) doesn't compile. An undefined value (e.g. a cast integer) throws `ArgumentException` when the options are built.
+
+When the check runs, the base64url SHA-256 thumbprint of the certificate from `CertificateRetriever` must equal `cnf.x5t#S256`. On a match `OnCertificateBindingValidated` fires, then `OnTokenValidated`. Each failure is a 401 with one of these messages in `context.Exception.Message`:
+
+- `Client certificate is not present`
+- `Client certificate is malformed` — the retriever threw; the original exception is the `InnerException`
+- `Access token does not contain a 'cnf' (confirmation) claim …`
+- `Malformed 'cnf' claim …`
+- `The 'cnf' claim does not contain an 'x5t#S256' member …`
+- `The certificate hash in the access token does not match the presented client certificate …`
+
+Kestrel has to request client certificates (`ClientCertificateMode`). Behind a TLS-terminating proxy, read the forwarded certificate instead:
 
 ```csharp
-options.ValidateCertificateBinding = CertificateBindingValidation.Required;          // also reject tokens with no cnf
-// options.ValidateCertificateBinding = CertificateBindingValidation.DangerouslyIgnore; // opt out entirely
-
-// CertificateRetriever defaults to ctx.Connection.GetClientCertificateAsync();
-// override it if the cert arrives via a header from a TLS-terminating proxy:
-options.CertificateRetriever = async ctx =>
+options.ValidateCertificateBinding = CertificateBindingValidation.Required; // also reject unbound tokens
+options.CertificateRetriever = ctx =>
 {
-    var pem = ctx.Request.Headers["X-Client-Cert"].ToString();
-    return string.IsNullOrEmpty(pem) ? null : X509Certificate2.CreateFromPem(Uri.UnescapeDataString(pem));
+    var pem = ctx.Request.Headers["X-Client-Cert"].ToString(); // whatever header your proxy sets
+    return Task.FromResult<X509Certificate2?>(
+        string.IsNullOrEmpty(pem) ? null : X509Certificate2.CreateFromPem(Uri.UnescapeDataString(pem)));
 };
 ```
 
-When the mode gate decides to validate, the presented client cert's base64url SHA-256 thumbprint is compared (constant-time) against the token's `cnf.x5t#S256` on **all three** validation routes (local JWT, live introspection, cached introspection). `CertificateRetriever` is invoked — and `OnCertificateBindingValidated` fires on success — only when validation actually runs. A `CertificateRetriever` that **throws** is treated as a binding verdict: a 401 `invalid_token` challenge carrying `Client certificate is malformed` (0.1.5; it previously surfaced as a 500). An undefined enum value throws `ArgumentException` during post-configuration. Note that cert-**binding** (validating the caller's token) is independent of mTLS client-**auth** (`TlsAuth`, how the API authenticates itself to the introspection endpoint).
+Certificate *binding* checks the caller's token. It is independent of mTLS *client authentication* (`TlsAuth`), which is how the API proves its own identity to the introspection endpoint.
 
 ## Events
 
-`MonoCloudAuthenticationEvents` derives from `JwtBearerEvents`, so the **standard JwtBearer events are inherited and fire on both paths** (JWT and opaque/introspected). Assign delegates on `options.Events`, or subclass and override the virtual methods.
-
-**Inherited JwtBearer events:**
+`options.Events` is a `MonoCloudAuthenticationEvents` (`: JwtBearerEvents`). Assign delegates on it, or subclass and override.
 
 | Event | Fires |
 | --- | --- |
-| `OnMessageReceived` | First, before the token is read from the `Authorization` header. Set `context.Token` to supply it yourself, or `context.Result` to short-circuit. |
-| `OnTokenValidated` | After validation + principal built, on **both** paths. `context` is the framework `TokenValidatedContext`; `context.SecurityToken` holds the parsed JWT on the JWT path and is **`null` on the opaque path** — read claims off `context.Principal`. |
-| `OnAuthenticationFailed` | On any failure — JWT validation error, introspection **infrastructure** failure, inactive token, cert-binding failure. `context.Exception` carries the error. As of 0.1.4 token verdicts (`active:false`, cert-binding — and, as of 0.1.5, a `CertificateRetriever` that throws, reported as `Client certificate is malformed`) yield a **401**, but introspection infrastructure failures (and exceptions thrown by opaque-path handlers) **rethrow → HTTP 500** unless you set `context.Result`. |
-| `OnChallenge` | Before the 401 `WWW-Authenticate` challenge is written. |
-| `OnForbidden` | On a 403. |
-
-**MonoCloud-specific hooks** (declared on `MonoCloudAuthenticationEvents`):
-
-| Event | Fires |
-| --- | --- |
-| `OnIntrospection` | Opaque path, just before the introspection HTTP request is sent. Mutate `context.IntrospectionRequest`. |
-| `OnCreatingJwtAssertion` | Inside `JwtAssertionAuth` before the assertion is built. Set `context.JwtAssertion` to fully override it. |
-| `OnCertificateBindingValidated` | After the client cert thumbprint matches `cnf.x5t#S256`. Raised only when `ValidateCertificateBinding` actually runs validation — never under `DangerouslyIgnore`, nor under `WhenPresent` for a token with no `x5t#S256`. |
+| `OnMessageReceived` | Once per request, before the token is read. Set `context.Token` to supply one, or `context.Result` to short-circuit. |
+| `OnTokenValidated` | On both paths, after claims are normalized and binding has passed. `context.SecurityToken` is `null` for introspected tokens, so use `context.Principal`. `context.Fail(…)` rejects. |
+| `OnAuthenticationFailed` | On every failure except the up-front `ClientId` / `Authority` checks, with the cause in `context.Exception`. Setting `context.Result` replaces the outcome. |
+| `OnChallenge` / `OnForbidden` | On a 401 challenge or a 403. |
+| `OnIntrospection` | Before the introspection request is sent. Modify or replace `context.IntrospectionRequest`, which already carries the form body and client authentication. |
+| `OnCreatingJwtAssertion` | Before `JwtAssertionAuth` builds its assertion. Set `context.JwtAssertion` to supply your own. |
+| `OnCertificateBindingValidated` | After a thumbprint match. `context.Fail(…)` rejects. |
 
 ```csharp
-options.Events = new MonoCloudAuthenticationEvents
+options.Events.OnAuthenticationFailed = ctx =>
 {
-    OnTokenValidated = ctx =>
-    {
-        ctx.HttpContext.RequestServices
-           .GetRequiredService<ILoggerFactory>()
-           .CreateLogger("Auth")
-           .LogInformation("Token validated for {Sub}", ctx.Principal?.FindFirst("sub")?.Value);
-        return Task.CompletedTask;
-    },
-    OnAuthenticationFailed = ctx =>
-    {
-        // ctx.Exception has the details; leave ctx.Result unset to keep the default 401.
-        return Task.CompletedTask;
-    }
+    ctx.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>()
+        .LogWarning(ctx.Exception, "MonoCloud authentication failed");
+    return Task.CompletedTask; // leave ctx.Result unset to keep the default outcome
 };
 ```
 
-> `MessageReceivedContext`, `TokenValidatedContext` and `AuthenticationFailedContext` are the framework's `Microsoft.AspNetCore.Authentication.JwtBearer` types — there is no shadowing anymore. Only `IntrospectionRequestContext`, `JwtAssertionContext` and `CertificateBindingValidatedContext` live in `MonoCloud.Authentication.Api.Shared.Context`.
+`MessageReceivedContext`, `TokenValidatedContext` and `AuthenticationFailedContext` are the framework's JwtBearer types. Only `IntrospectionRequestContext`, `JwtAssertionContext` and `CertificateBindingValidatedContext` are in `MonoCloud.Authentication.Api.Shared.Context`.
 
-## Accessing the authenticated user
+## Reading claims
 
-Read claims from `ClaimsPrincipal` — inject it in minimal APIs, or use `User` / `HttpContext.User` in controllers.
+Inject `ClaimsPrincipal` in minimal APIs, or use `User` in controllers.
 
-**`MapInboundClaims` defaults to `true`.** On the **JWT path** this maps claim types to legacy WS-* URIs — `sub` becomes `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier`, etc. If you index claims by short name (`"sub"`), either set `options.MapInboundClaims = false` to keep OIDC names, or set `NameClaimType`/`RoleClaimType` to the mapped URIs. **Introspection/opaque claims are never remapped** — they are built verbatim from the RFC 7662 JSON.
-
-```csharp
-// Minimal API
-app.MapGet("/api/profile", (ClaimsPrincipal user) => Results.Ok(new
-{
-    Name   = user.Identity?.Name,                        // reflects NameClaimType
-    Scopes = user.FindAll("scope").Select(c => c.Value), // one claim per scope on both paths
-    Groups = user.FindAll("groups").Select(c => c.Value) // requires RoleClaimType = "groups"
-})).RequireAuthorization();
-
-// With MapInboundClaims = false, read short names directly:
-app.MapGet("/api/sub", (ClaimsPrincipal user) => user.FindFirst("sub")?.Value)
-   .RequireAuthorization();
-```
+- **`MapInboundClaims` is `true` by default.** On the JWT path it renames `sub` → `ClaimTypes.NameIdentifier`, `email` → `ClaimTypes.Email` and `role` / `roles` → `ClaimTypes.Role`. `scope`, `groups` and `cnf` keep their names, and introspected claims are never renamed. Set `options.MapInboundClaims = false` to use the same OIDC names (`FindFirst("sub")`) on both paths.
+- **`User.Identity.Name` is `null`** unless `NameClaimType` names a claim the token carries, e.g. `"sub"` with `MapInboundClaims = false`.
+- **The raw token** is saved (`SaveToken`): `await HttpContext.GetTokenAsync("access_token")`.
 
 ```csharp
-// Controller
-[ApiController]
-[Route("api/[controller]")]
-public class WeatherController : ControllerBase
+app.MapGet("/api/profile", (ClaimsPrincipal user) => new
 {
-    [HttpGet]
-    [Authorize(Policy = "read:weather")]
-    public IActionResult Get() => Ok(new { user = User.Identity?.Name });
-
-    [HttpDelete("{id}")]
-    [Authorize(Roles = "admin")] // matches RoleClaimType = "groups"
-    public IActionResult Delete(string id) => NoContent();
-}
+    Sub    = user.FindFirst("sub")?.Value,                // with MapInboundClaims = false
+    Scopes = user.FindAll("scope").Select(c => c.Value),
+    Groups = user.FindAll("groups").Select(c => c.Value)  // ids and names with RoleClaimType = "groups"
+}).RequireAuthorization();
 ```
 
 ## Multiple schemes
 
-Register the handler more than once with distinct scheme names to validate tokens from different tenants/audiences, then target a scheme in `[Authorize(AuthenticationSchemes = "…")]` or a policy's `AuthenticationSchemes`:
-
 ```csharp
 builder.Services.AddAuthentication()
-    .AddMonoCloudAuthentication("tenant-a", o => { o.Authority = a; o.Audience = audA; })
-    .AddMonoCloudAuthentication("tenant-b", o => { o.Authority = b; o.Audience = audB; });
+    .AddMonoCloudAuthentication("tenant-a", o => { o.Authority = authorityA; o.Audience = audienceA; })
+    .AddMonoCloudAuthentication("tenant-b", o => { o.Authority = authorityB; o.Audience = audienceB; });
+// [Authorize(AuthenticationSchemes = "tenant-a")], or add the scheme to a policy's AuthenticationSchemes
 ```
 
-The cache key includes the scheme name, so schemes never share cached claims for the same token.
+Each scheme has its own options, cache keys and in-flight introspection de-duplication. With more than one scheme and no default, each `[Authorize]` (or a default policy) must name its scheme.
 
 ## Common pitfalls
 
-1. **Opaque tokens without `ClientId` + `ClientAuth`.** The introspection path requires `Authority` + `ClientId` + `ClientAuth`; each throws `ArgumentNullException` at request time. Pure local-JWT validation needs none of them.
-2. **`EnableCaching = true` with no singleton cache.** Startup throws `ArgumentException("IIntrospectionCache not found...")`. Register `IIntrospectionCache` and it **must** be a singleton or DI scope validation fails.
-3. **Forgetting `RoleClaimType = "groups"`.** Without it, the `groups` claim stays a raw JSON-array string on the opaque path and `RequireClaim("groups", "admin")` never matches.
-4. **Indexing claims by short name with `MapInboundClaims` on (the default).** `sub`/`name`/etc. become long WS-* URIs on the JWT path. Set `MapInboundClaims = false` or use the mapped URIs. (Introspection claims are unaffected.)
-5. **Assuming JWT scopes stay unsplit.** As of 0.1.4 a space-delimited `scope` is split into per-value `"scope"` claims on **both** the JWT and introspection paths, so `RequireClaim("scope", "read:weather")` works uniformly — no custom requirement needed.
-6. **Passing the discovery URL as `Authority`.** Provide the tenant root (`https://acme.us.monocloud.com`); the SDK appends `/.well-known/openid-configuration` and prefixes `https://` if the scheme is missing.
-7. **`Audience` ignored.** It only feeds `ValidAudience` when `TokenValidationParameters.ValidAudience`/`ValidAudiences` is unset — setting them directly overrides `Audience`.
-8. **`UseAuthentication()`/`UseAuthorization()` order or omission.** Both are required, `UseAuthentication()` first, both after routing — otherwise `[Authorize]` yields 401/403 even for valid tokens.
-9. **`TlsAuth`/`SpiffeX509Auth` without mTLS aliases.** The discovery doc must expose `mtls_endpoint_aliases.introspection_endpoint` (or a trust-store entry) or you get `InvalidOperationException`; without an explicit cert you must attach it to `options.HttpClient`'s handler.
-10. **`TokenValidatedContext.SecurityToken` is `null` on the opaque path.** The event now uses the framework `TokenValidatedContext`; `SecurityToken` holds the parsed JWT on the JWT path but is `null` for introspected (opaque) tokens — read claims off `context.Principal` instead of casting a `Token`.
-11. **Assuming certificate binding is still off by default.** As of **0.1.5** `ValidateCertificateBinding` is a `CertificateBindingValidation` enum defaulting to `WhenPresent`, so any token whose `cnf` claim carries an `x5t#S256` thumbprint is now validated — a caller without a matching client certificate gets a 401. Set `CertificateBindingValidation.DangerouslyIgnore` to opt out, `Required` to also reject unbound tokens. Delegate assignments (`_ => true` / `_ => false`) no longer compile.
+1. **Middleware order.** Explicit calls must be `UseAuthentication()` then `UseAuthorization()`, both after an explicit `UseRouting()`. Otherwise valid tokens get 401s. `WebApplication` adds both automatically when you call neither; `Startup`-style pipelines must call both.
+2. **Opaque tokens without `ClientId` + `ClientAuth`.** Requests fail with 500 (`ArgumentNullException`). JWT-only APIs need neither.
+3. **`EnableCaching = true` without a singleton `IIntrospectionCache`.** You get `ArgumentException` (no registration) or a DI scope-validation error (scoped registration).
+4. **Group checks without `RoleClaimType = "groups"`.** `{id,name}` groups stay JSON strings, and `[Authorize(Roles = …)]` / `IsInRole` never match.
+5. **Short claim names with `MapInboundClaims` on.** `FindFirst("sub")` / `FindFirst("email")` return `null` on the JWT path.
+6. **`Authority` set to the discovery URL.** Use the tenant root. The SDK adds `https://` if no scheme is given, and the framework appends `/.well-known/openid-configuration`. An `http://` authority throws `InvalidOperationException` unless `RequireHttpsMetadata = false`.
+7. **Bound tokens without a certificate at the app.** TLS terminated at a proxy, or Kestrel not asking for client certs, gives 401 `Client certificate is not present`. Fix it with `CertificateRetriever` / `ClientCertificateMode`. Use `DangerouslyIgnore` only when binding is enforced elsewhere.
+8. **Hardcoded secrets.** Load `ClientSecretAuth` / `JwtAssertionAuth` secrets from User Secrets or a vault, never from committed `appsettings.json` or source.
 
-## Onboarding checklist
+## Verify and go deeper
 
-1. `dotnet add package MonoCloud.Authentication.Api`.
-2. Register an **API** (audience) in the MonoCloud dashboard matching `options.Audience`.
-3. `Program.cs`: `AddAuthentication(MonoCloudAuthenticationDefaults.AuthenticationScheme).AddMonoCloudAuthentication(options => { ... })`.
-4. Set `Authority` + `Audience` (from `IConfiguration`). For opaque tokens also set `ClientId` + `ClientAuth`.
-5. Add `app.UseAuthentication(); app.UseAuthorization();` (in that order).
-6. For group policies, set `options.RoleClaimType = "groups"` and define policies with `AddAuthorization` / `RequireClaim`.
-7. Protect endpoints with `[Authorize(Policy=…)]` / `.RequireAuthorization(…)`, and read `ClaimsPrincipal` in handlers.
-8. (Optional) Register a singleton `IIntrospectionCache` and set `EnableCaching = true` to cache introspection results.
-
-## Deeper reference
-
-- [`references/api-surface.md`](references/api-surface.md) — every `MonoCloudAuthenticationOptions` option (type, default, behavior), all four DI overloads, every client-auth type, and every event context.
-- [`references/troubleshooting.md`](references/troubleshooting.md) — symptom → cause → fix for the common failure modes (401/403, `ArgumentNullException` on the opaque path, `IIntrospectionCache not found`, `MapInboundClaims` claim-name surprises, group-claim non-expansion, mTLS alias errors).
-- Quickstart: <https://www.monocloud.com/docs/quickstarts/dotnet-api-authentication> · SDK reference: <https://www.monocloud.com/docs/sdks/dotnet-api-authentication> · API reference: <https://monocloud.github.io/api-authentication-dotnet>.
+- [`scripts/verify.js`](scripts/verify.js) checks a project: package and target framework, registration and middleware order, `Authority` / `Audience`, client-auth pairing, cache lifetime, group/role setup, and options that don't exist. Run `node scripts/verify.js [project-dir]` from this skill's directory.
+- [`references/api-surface.md`](references/api-surface.md) covers every public type, option, client-auth type, event and context, the request pipeline, claim shaping and a failure-message reference.
+- [`references/troubleshooting.md`](references/troubleshooting.md) is symptom → cause → fix for 401 / 403 / 500, claims, caching, mTLS and build errors.
+- Docs: [quickstart](https://www.monocloud.com/docs/quickstarts/dotnet-api-authentication) · [SDK reference](https://www.monocloud.com/docs/sdks/dotnet-api-authentication) · [API reference](https://monocloud.github.io/api-authentication-dotnet).

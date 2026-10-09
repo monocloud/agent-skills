@@ -1,212 +1,126 @@
 # Troubleshooting — `@monocloud/auth-nextjs`
 
-Quick reference for the most common things that go wrong when integrating MonoCloud authentication into a Next.js application. Each entry is **what the symptom looks like → root cause → fix**.
+Symptom → cause → fix. The auth-route contract and every env var are in [api-surface.md](api-surface.md); helper defaults are in [protecting.md](protecting.md).
 
-## Wrong file name (`proxy.ts` vs `middleware.ts`)
+## First steps
 
-**Symptom:** Auth routes 404 (`/api/auth/signin` → "page not found"); no redirect loop, just a normal 404.
+- Run `node scripts/verify.js <project-dir>` from this skill's directory ([verify.js](../scripts/verify.js)): it checks dependencies, the proxy/middleware file and matcher, env vars, and SDK imports.
+- Auth-route failures return an empty `500` and are logged with `console.error`; read the server log. Pass `onError` to `authMiddleware()` / `monoCloudAuth()` to render your own response.
+- `DEBUG=@monocloud:auth-nextjs` turns on the SDK's debug logging.
 
-**Cause:** `proxy.ts` is only valid on Next.js **16+**. On Next.js 13–15 the file must be named `middleware.ts`. Next.js silently ignores `proxy.ts` on older versions.
+## Auth routes return 404
 
-**Fix:** Check `next` in `package.json`. If the major is `<16`, rename the file:
+- **Wrong file name.** Next.js 16+ runs `proxy.ts`; Next.js 13–15 only runs `middleware.ts` and ignores `proxy.ts`. Check `next` in `package.json` and rename — the body is the same.
+- **Matcher excludes them.** `/((?!api|_next/static|…).*)` skips every `/api` path. Use `/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt).*)` or otherwise cover the auth routes.
+- **Nothing mounted.** Without middleware, add the `monoCloudAuth()` catch-all (`app/api/auth/[...monocloud]/route.ts` exporting `GET` and `POST`, or `pages/api/auth/[...monocloud].ts`).
 
-```bash
-mv src/proxy.ts src/middleware.ts   # or proxy.ts -> middleware.ts at root
-```
+## Config warning at startup, then `500` from the auth routes
 
-The export body is identical (`export default authMiddleware()` + `export const config`). Only the filename differs.
+**Symptom:** `WARNING: One or more configuration options were not provided for MonoCloudClient.`, often followed by `Missing: tenantDomain - Set MONOCLOUD_AUTH_TENANT_DOMAIN environment variable in your .env file.`; sign-in then answers `500` and logs a `MonoCloudValidationError`.
 
-## Double-mounted auth routes (middleware + catch-all)
+**Cause:** the constructor only warns; validation throws on the first auth-route request. A `Missing:` line is printed for a required value that is absent **or invalid** (e.g. a tenant domain without `https://`).
 
-**Symptom:** Sign-in redirects bounce in a loop. `/api/auth/callback` returns weird state errors. `useAuth()` sometimes returns the wrong user.
+| Logged message | Fix |
+| --- | --- |
+| `"<key>" is required` | set the required `MONOCLOUD_AUTH_*` variable |
+| `"tenantDomain" must be a valid uri` | `MONOCLOUD_AUTH_TENANT_DOMAIN=https://<tenant>` |
+| `Scope must contain openid` | add `openid` to `MONOCLOUD_AUTH_SCOPES` |
+| `Cookie must be set to secure when app url protocol is https.` | remove `MONOCLOUD_AUTH_SESSION_COOKIE_SECURE=false` / `_STATE_COOKIE_SECURE=false` — `Secure` must match the `MONOCLOUD_AUTH_APP_URL` scheme (setting `true` on an `http:` URL is rejected too) |
+| `Resource must be a valid URL without query or hash parameters` | `MONOCLOUD_AUTH_RESOURCE` must be space-separated absolute URLs |
+| `clientSecret must be a valid JWK when clientAuthMethod is 'private_key_jwt'` | put the private-key JWK JSON (with `kty`) in `MONOCLOUD_AUTH_CLIENT_SECRET` |
+| `The state cookie name must be different from the session cookie name` (or `… must not start with …`) | rename one of the cookies |
 
-**Cause:** Both `authMiddleware()` in `proxy.ts`/`middleware.ts` **and** `monoCloudAuth()` in `app/api/auth/[...monocloud]/route.ts` are mounted. They both try to handle the same routes.
+Numeric limits are enforced the same way: `MONOCLOUD_AUTH_SESSION_MAX_DURATION` must exceed `MONOCLOUD_AUTH_SESSION_DURATION` (default max `604800`), `MONOCLOUD_AUTH_STATE_DURATION` ≥ `300`, `MONOCLOUD_AUTH_STATE_MAX_CONCURRENT` `1`–`20`, `MONOCLOUD_AUTH_RESPONSE_TIMEOUT` ≥ `1000`.
 
-**Fix:** Pick one. The recommended path is `authMiddleware()`. Only mount `monoCloudAuth()` on a catch-all when middleware genuinely can't be used (rare infrastructure constraint). Delete the catch-all route if `authMiddleware()` is present.
+## Boolean or numeric env vars have no effect
 
-## `useAuth()` returns no user after sign-in
+Booleans accept only `true`/`false` (case-insensitive) — `1`, `yes`, `on` are ignored. Numbers go through `parseInt`; a non-numeric value is ignored. Either way the default applies silently. Booleans: `USE_PAR`, `FEDERATED_SIGNOUT`, `ALLOW_QUERY_PARAM_OVERRIDES`, `FETCH_USER_INFO`, `REFETCH_USER_INFO`, `REFETCH_STRICT_PROFILE_SYNC`, `SESSION_SLIDING`, `SESSION_COOKIE_HTTP_ONLY`, `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_PERSISTENT`, `STATE_COOKIE_SECURE` (all prefixed `MONOCLOUD_AUTH_`).
 
-**Symptom:** Sign-in completes (session cookie is set, server-side `getSession()` works), but in a client component `useAuth()` returns `{ user: null, isAuthenticated: false }`.
+## Callback fails: `Invalid Authentication State`
 
-**Cause:** The `config.matcher` on the middleware excludes `/api/auth/userinfo`, so the userinfo endpoint isn't intercepted.
+The callback looks for the cookie of that sign-in transaction (`state.<hash>`); if it is missing or unreadable:
 
-**Fix:** Use the recommended matcher (it covers `/api/auth/*` by negation, not by enumeration):
+- The sign-in started on a different origin than `MONOCLOUD_AUTH_APP_URL` (`127.0.0.1` vs `localhost`, a preview-deployment URL). The callback goes to the `appUrl` host, where the cookie doesn't exist — browse via the configured origin.
+- The transaction ended: older than `state.duration` (15 min), evicted beyond `state.maxConcurrent` pending sign-ins, cleared because another tab completed sign-in or signed out, or the callback URL was opened twice (the cookie is consumed).
+- `MONOCLOUD_AUTH_COOKIE_SECRET` changed between sign-in and callback.
+- `responseMode: 'form_post'` over plain `http`: the state cookie becomes `SameSite=None` without `Secure`, which browsers drop.
 
-```ts
-export const config = {
-  matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt).*)',
-  ],
-};
-```
+## Callback fails with a token or OP error
 
-If you've narrowed the matcher, ensure the path mapped by `MONOCLOUD_AUTH_USER_INFO_URL` (default `/api/auth/userinfo`) is included.
+| Error | Cause / fix |
+| --- | --- |
+| `MonoCloudOPError` (`error` = e.g. `access_denied`, `login_required`) | MonoCloud returned an error to the callback — check `errorDescription` |
+| `Invalid Issuer` | `MONOCLOUD_AUTH_TENANT_DOMAIN` must equal the issuer exactly (scheme + host) |
+| `Invalid signing alg` | `MONOCLOUD_AUTH_ID_TOKEN_SIGNING_ALG` differs from the application's ID-token algorithm |
+| `Invalid audience claim` | `MONOCLOUD_AUTH_CLIENT_ID` belongs to another application |
+| `Unexpected JWT "exp"` / `"nbf"` claim value | server clock drift — fix NTP or raise `MONOCLOUD_AUTH_CLOCK_TOLERANCE` |
+| `Failed to parse JWT Header` / `Failed to parse JWT Payload` | the token's header/payload is not valid UTF-8 JSON |
 
-## `protect()` / `redirectToSignIn()` throws "App Router only"
+## `Request to https://<tenant>/… timed out after 10000ms`
 
-**Symptom:** Server-side error: `protect() can only be used in App Router server environments (RSC, route handlers, or server actions)` (same wording for `redirectToSignIn()` / `redirectToSignOut()`).
+A `MonoCloudHttpError`: every request to MonoCloud (discovery, JWKS, token, userinfo, PAR, revocation) is aborted after `responseTimeout` ms — default `10000`, minimum `1000`. Slow networks or egress proxies usually trip discovery/JWKS first. Raise `MONOCLOUD_AUTH_RESPONSE_TIMEOUT` (or `responseTimeout` in the constructor).
 
-**Cause:** Called from a Pages Router file (`pages/...`) or from a client component.
+## `useAuth()` never shows a user
 
-**Fix (Pages Router):** Use `protectPage()` for `getServerSideProps` or `protectApi()` for API routes; or call `getSession(req, res)` and respond yourself. The `protect()`/`redirectToSignIn()`/`redirectToSignOut()` helpers are App-Router-only.
+- `error.message === 'Failed to fetch user'`: the userinfo route answered non-2xx — usually a 404 because the matcher or file name is wrong (see [Auth routes return 404](#auth-routes-return-404)).
+- `user` is `undefined` with no error: the route answered `204` (no session cookie reached it). After a route override, set `NEXT_PUBLIC_MONOCLOUD_AUTH_USER_INFO_URL` (including any `basePath`).
+- `refetch()` does nothing while no user is loaded — re-mount or reload after signing in.
 
-**Fix (client component):** Use `<RedirectToSignIn />` from `@monocloud/auth-nextjs/components/client`.
+## `… can only be used in App Router server environments (RSC, route handlers, or server actions)`
 
-## `protectApi()` returns 401/403 with no redirect
+Thrown by `protect()`, `redirectToSignIn()` and `redirectToSignOut()` outside the App Router server (Pages Router files, client code). In the Pages Router use `protectPage()` / `protectApi()` or `getSession(req, res)`; on the client render `<RedirectToSignIn />`. For `protect()` the same message also replaces any error thrown while reading the session — if you are in an RSC already, check the config and cookie secret.
 
-**Symptom:** A protected API endpoint returns JSON 401, but the user is not redirected to sign in.
+## Protection responds differently than expected
 
-**Cause:** This is by design — `protectApi()` is for API handlers, which return JSON, not redirects. The browser does not follow JSON 401s.
+- `protectApi()` returns JSON `401`/`403`, never a redirect — redirect from a page helper or the middleware instead, or handle `401` in the client.
+- `protect()` redirects to sign-in on a group failure as well; use `isUserInGroup()` and answer `403` yourself.
+- Middleware group rules are any-of even with `matchAll: true`; enforce all-of in the page/route.
+- Unanchored `protectedRoutes` strings match anywhere in the path (`'/admin'` also matches `/x/admin`); use `^…`.
+- A request with an `x-middleware-subrequest` header always gets `403 {"message":"forbidden"}` from the middleware.
 
-**Fix:** If you want redirect-on-fail, do the redirect from a page (`protectPage`) or middleware (`authMiddleware`). For SPAs that consume the API directly, handle the 401 in the client.
+## Client helpers in Server Components
 
-## `<Protected>` / `useAuth()` used in a Server Component
+`useAuth`, `protectClientPage`, `<Protected>` and `<RedirectToSignIn>` are client code — use them in files that start with `"use client"`, and use `getSession()` / server helpers in Server Components. They only hide UI; the data still reaches the browser.
 
-**Symptom:** Build error: "useAuth must be used in a Client Component" or similar.
+## Overridden route, but `<SignIn>` / `<SignOut>` / `useAuth()` use the default
 
-**Cause:** Both helpers require `"use client"`. `useAuth()` is a React hook built on SWR (`useSWR`) and `<Protected>` calls it internally — hooks only run in Client Components. Neither needs a provider or wrapper.
+Client code reads only the `NEXT_PUBLIC_` mirrors. Set `NEXT_PUBLIC_MONOCLOUD_AUTH_SIGNIN_URL` / `_SIGNOUT_URL` / `_USER_INFO_URL` (and `_GROUPS_CLAIM`) to the same value as the server variable — the public value overwrites the server one when a client is constructed — and update the callback / sign-out URLs in the dashboard.
 
-**Fix:** Use `getSession()` for server-side conditional rendering. Reserve `<Protected>` and `useAuth()` for components that have `"use client"` at the top.
+## Sessions disappear after deploys or across instances
 
-## `MONOCLOUD_AUTH_COOKIE_SECRET` is missing or too short
+The session cookie (the whole session, or only the store key when `session.store` is set) is encrypted with `MONOCLOUD_AUTH_COOKIE_SECRET` (AES-GCM, PBKDF2-derived key). A cookie that fails to decrypt is treated as signed-out and deleted — so every instance must share the same secret, and rotating it signs everyone out. The validator accepts 8 characters, but use `openssl rand -hex 32`.
 
-**Symptom:** Crash on first request mentioning the cookie secret, or sessions that decrypt locally but fail in production (different secret across deployments).
+## Store-backed sessions look missing, or hooks/`resources` don't apply
 
-**Cause:** The cookie secret is the encryption key for the session cookie. The SDK's option validator only enforces a minimum of **8 characters** (`.min(8)` in `node-core/src/options/validation.ts`), but 8 chars is nowhere near enough entropy for cookie encryption. PBKDF2 derives a key from whatever you give it, so a weak secret silently produces a weak cookie.
+The root function exports use their own env-only singleton. If you created `new MonoCloudNextClient({ session: { store }, … })`, use **its** methods everywhere (`monoCloud.authMiddleware()`, `monoCloud.getSession()`, `monoCloud.protectPage()`, …). The root `getSession()` cannot read store-backed sessions (the cookie holds only the store key).
 
-**Fix:** Always generate a high-entropy secret regardless of what the validator allows. The conventional choice is 32 random bytes encoded as 64 hex characters:
+## `getTokens()` errors
 
-```bash
-openssl rand -hex 32
-```
+| Error | Meaning |
+| --- | --- |
+| `MonoCloudValidationError: Session does not exist` | not signed in — check `isAuthenticated()` first |
+| `MonoCloudValidationError: Session does not contain refresh token` | no token for that resource/scopes yet and no refresh token to get one |
+| `MonoCloudTokenError: No refresh token available to refresh the expired access token` | the access token expired and the session has no refresh token — sign in again |
+| `MonoCloudOPError` (e.g. `invalid_grant`) | MonoCloud rejected the refresh token or the requested resource/scopes (they must have been granted at sign-in) |
+| `Invalid resource "…": …` / `Scopes must be a space-separated string` | invalid `resource` / `scopes` argument |
 
-Put it in `.env.local` (dev) and your hosting platform's secret manager (prod). Use the **same** value across every instance that needs to read the cookie — secrets that drift between deployments invalidate live sessions. Never commit it.
+## Refreshed tokens or sliding expiry not persisted from Server Components
 
-## Cookie refresh lost when calling `getSession()` in middleware
+**Symptom:** `getTokens()` in a Server Component returns a fresh token, but the next request refreshes again; or a sliding session expires although the user is active. A one-time `console.warn` with Next.js's "Cookies can only be modified in a Server Action or Route Handler" message appears.
 
-**Symptom:** Intermittent "session expired" errors mid-flow even though refresh tokens are valid.
+**Cause:** refreshing tokens and sliding the expiry both rewrite the session cookie, which Next.js forbids during Server Component rendering; the SDK swallows the error with a single warning. Without a store the new tokens are lost; with a store the tokens persist but the cookie's lifetime does not advance.
 
-**Cause:** `getSession()` may rotate the cookie on a successful refresh. If you call it inside middleware without passing the response object, those rotations don't get serialized back.
+**Fix:** call `getTokens()` from a Route Handler, Server Action or middleware (which can write cookies), and rely on the middleware — not Server Component reads — to keep sliding sessions alive.
 
-**Fix:** In middleware/route handler integration, pass `req, res`:
+## Back-channel logout returns 404, 405, 400 or 500
 
-```ts
-const session = await getSession(req, res);
-return res; // <- must return the response object the SDK wrote to
-```
+- `404`: no `onBackChannelLogout` on the instance whose `authMiddleware()` / `monoCloudAuth()` is mounted (it is constructor-only — env vars can't enable it); with the catch-all, also a request to the default path after the route was overridden.
+- `405`: not a `POST`. An App Router catch-all must export the handler as `POST` too. The callback check runs first, so an unconfigured route answers `404` for any method.
+- `400 {"error":"invalid_request","error_description":"The logout token is missing or invalid."}`: no `logout_token` form field, or validation failed — bad signature, `alg` ≠ `MONOCLOUD_AUTH_ID_TOKEN_SIGNING_ALG`, wrong issuer/audience, missing `iat`, expired, no `sub` and no `sid`, a `nonce` present, or no back-channel-logout `events` claim.
+- `500`: invalid config, discovery/JWKS failure, or `onBackChannelLogout` threw.
 
-## Overrode an auth route URL but `<SignIn>` / `useAuth()` still uses the old one
+With `onError` supplied, the `400` and `500` cases go to it instead (a missing token as `MonoCloudValidationError`, an invalid one as `MonoCloudTokenError`) and you must send the response. Keep the route inside `config.matcher` and register its URL in the dashboard.
 
-**Symptom:** Set `MONOCLOUD_AUTH_SIGNIN_URL=/login` (server side); the server sees the new URL but `<SignIn>` still links to `/api/auth/signin`.
+## Code uses names that don't exist
 
-**Cause:** Client-side helpers can't read server-only env vars. They look at the `NEXT_PUBLIC_*` mirror.
-
-**Fix:** Mirror every overridden auth-route env var with its public twin:
-
-```
-MONOCLOUD_AUTH_SIGNIN_URL=/login
-NEXT_PUBLIC_MONOCLOUD_AUTH_SIGNIN_URL=/login
-```
-
-…and update the redirect URI in the MonoCloud dashboard if the callback URL changed.
-
-## Boolean env vars silently fall back to default
-
-**Symptom:** `MONOCLOUD_AUTH_SESSION_SLIDING=1` (or `=yes`, `=on`) doesn't enable sliding sessions. `MONOCLOUD_AUTH_USE_PAR=0` doesn't disable PAR.
-
-**Cause:** The boolean coercion helper (`getBoolean` in `core/src/utils/internal.ts`) only accepts the literal strings `true` or `false` (case-insensitive — `True`, `TRUE`, `FALSE` work). Anything else (`1`, `0`, `yes`, `no`, `on`, `off`, empty string) returns `undefined`, which falls back to the option's default. There's no warning — the variable is silently ignored.
-
-**Fix:** Use the exact strings `true` or `false` in your env files:
-
-```
-MONOCLOUD_AUTH_SESSION_SLIDING=true
-MONOCLOUD_AUTH_USE_PAR=false
-```
-
-This applies to every `MONOCLOUD_AUTH_*` boolean option: `USE_PAR`, `FEDERATED_SIGNOUT`, `ALLOW_QUERY_PARAM_OVERRIDES`, `FETCH_USER_INFO`, `REFETCH_USER_INFO`, `REFETCH_STRICT_PROFILE_SYNC`, `SESSION_SLIDING`, and the cookie flags (`SESSION_COOKIE_HTTP_ONLY`, `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_PERSISTENT`, `STATE_COOKIE_SECURE`).
-
-## Requests to MonoCloud fail with "timed out after 10000ms"
-
-**Symptom:** Sign-in, callback, `useAuth()`, or `getTokens()` fails with a `MonoCloudHttpError` reading `Request to https://<tenant>/... timed out after 10000ms`. Slow networks or an egress proxy usually trip it on the very first call (discovery / JWKS).
-
-**Cause:** Every request the SDK makes to the authorization server — `/.well-known/openid-configuration`, the JWKS URI, token, userinfo, PAR, and revocation — is aborted via `AbortController` after `responseTimeout` milliseconds, which defaults to **10000**. As of `@monocloud/auth-nextjs@0.2.8` the option and its env var actually take effect; in earlier versions they were resolved and then ignored, so upgrading can surface timeouts that were previously unbounded.
-
-**Fix:** Raise it — the validator rejects anything below `1000` ms:
-
-```
-MONOCLOUD_AUTH_RESPONSE_TIMEOUT=20000
-```
-
-…or pass it in code: `new MonoCloudNextClient({ responseTimeout: 20000 })`. The env value is parsed with `parseInt`, so a non-numeric string is silently discarded and the `10000` default applies.
-
-## `getTokens()` in a Server Component silently no-ops the session write
-
-**Symptom:** `getTokens()` returns a fresh access token from a React Server Component, but on the next request the cookie still carries the old token — so the SDK refreshes again. For sliding sessions: the rolling window never advances when most reads happen inside Server Components and the session expires sooner than expected.
-
-**Cause:** When the access token is missing or expired, `getTokens()` calls `oidcClient.refreshSession()` and then `sessionService.updateSession()`. `updateSession` always tries to write the updated session **back to the cookie** to update either the encrypted session payload (no store) or the lifetime metadata (`c`/`u`/`e` — store mode). Next.js App Router forbids `cookies().set()` outside Server Actions, Route Handlers, and middleware, and the SDK's cookie wrapper catches that error and emits a single `console.warn` instead of throwing (see `monocloud-cookie-response.ts`).
-
-The split:
-
-- **No `session.store`** — full session lives in the cookie. The refresh succeeds at the OP, but the new access token, new id token, possibly-rotated refresh token, and bumped `lifetime.u` are all lost. Every subsequent Server Component call re-refreshes from scratch using the same (still-valid) refresh token — wasteful, and if your OP enforces refresh-token rotation it will eventually invalidate the old token and break auth entirely.
-- **With `session.store`** — only the session key + lifetime live in the cookie; the payload is in your store. `store.set(key, session, lifetime)` runs against your store directly, so the **new tokens persist correctly**. But the cookie write that would bump `lifetime.u` is the one that fails — so for `sliding: true`, the rolling window doesn't advance from Server Components, even though the data is up to date.
-
-**Fix:** Call `getTokens()` from a context where cookie writes are allowed:
-
-- Route Handler (`app/api/.../route.ts`) — fetch the token there and return it to the page.
-- Server Action — call `getTokens()` in the action, then revalidate.
-- `authMiddleware()` — runs on every matched request; it can refresh tokens and write cookies. Use this as the steady-state strategy when you want sliding sessions to actually slide.
-
-If you must read a token in a Server Component, accept that it may be re-fetched on the next call. Don't rely on Server Component reads to keep a sliding session alive.
-
-**Verify:** A `console.warn` like `"Cookies can only be modified in a Server Action or Route Handler"` (or similar Next.js wording) in your dev server output is the smoking gun.
-
-## Back-channel logout endpoint returns 404, 405, or 400
-
-**Symptom:** MonoCloud reports failed back-channel logout deliveries. Hitting `/api/auth/backchannel-logout` yields `404` (empty body), `405`, or `400 {"error":"invalid_request","error_description":"The logout token is missing or invalid."}`.
-
-**Cause, per status:**
-
-- `404` — no `onBackChannelLogout` callback is configured on the client instance whose `authMiddleware()` / `monoCloudAuth()` is mounted. The callback is **constructor-only**; there is no `MONOCLOUD_AUTH_*` env var for it, so setting env vars alone can never activate the route. A `404` also appears when `routes.backChannelLogout` / `MONOCLOUD_AUTH_BACK_CHANNEL_LOGOUT_URL` was overridden and the default path is being probed. (Before `@monocloud/auth-nextjs@0.2.7` the route `404`'d *even when* the callback was configured — upgrade if you see that.)
-- `405` — the route was reached with something other than `POST`. Notifications are `application/x-www-form-urlencoded` `POST` requests. In an App Router catch-all mounting `monoCloudAuth()`, exporting only `GET` produces this (or a Next.js `405`); export the handler for `POST` too. The callback check runs first, so an unconfigured route answers `404` regardless of method.
-- `400` — the request had no `logout_token` form field, or the token failed validation (bad signature, wrong issuer/audience, missing `events` back-channel-logout claim, no `sub` and no `sid`, or a forbidden `nonce`). This is the spec-compliant response; `500` is reserved for configuration, discovery/JWKS, and `onBackChannelLogout` callback failures.
-
-**Fix:**
-
-```ts
-// src/monocloud.ts
-import { MonoCloudNextClient } from "@monocloud/auth-nextjs";
-
-export const monoCloud = new MonoCloudNextClient({
-  session: { store: redisSessionStore },
-  onBackChannelLogout: async (sub, sid) => {
-    await redisSessionStore.deleteBySid(sid);
-  },
-});
-```
-
-```ts
-// src/app/api/auth/[...monocloud]/route.ts — only if you cannot use middleware
-import { monoCloud } from "@/monocloud";
-
-const handler = monoCloud.monoCloudAuth();
-
-export { handler as GET, handler as POST };
-```
-
-Also keep the route inside `config.matcher` and register the URL in the MonoCloud dashboard. To take over the error response, pass `onError` to `authMiddleware()` / `monoCloudAuth()` — it now fires for back-channel logout too, and an invalid token arrives as a `MonoCloudTokenError`.
-
-## Older training-data SDK ghosts
-
-**Symptom:** Code references `MonoCloudAuthProvider`, `useUser`, `monoCloudMiddleware`, or a developer-written `app/api/auth/[...monocloud]/route.ts` as the default integration. None of those exist in `@monocloud/auth-nextjs`.
-
-**Cause:** The agent is pattern-matching against an older or similarly named MonoCloud package from training data.
-
-**Fix:** Always look up the actual `package.json` first. The exports in `@monocloud/auth-nextjs` are documented in [`api-surface.md`](api-surface.md). The route catch-all is **only** for the edge case where middleware can't be used.
-
-## Diagnostic
-
-Run the bundled verify script to check env + dependency wiring without opening the app:
-
-```bash
-node skills/monocloud-auth-nextjs/scripts/verify.js
-```
+`MonoCloudAuthProvider`, `UserProvider`, `useUser`, `useMonoCloudAuth`, `monoCloudMiddleware`, `handleAuth`, `withPageAuthRequired`, `withApiAuthRequired` are not part of `@monocloud/auth-nextjs` — they come from other SDKs or stale examples. Use `authMiddleware`, `useAuth` (from `/client`), `protectPage`, `protectApi`; see [api-surface.md](api-surface.md).

@@ -1,46 +1,43 @@
 ---
 name: monocloud-auth-react
-description: Use when integrating MonoCloud authentication into a React single-page application — installing or configuring `@monocloud/auth-react`, wrapping the tree in `<MonoCloudAuthProvider>` with `tenantDomain` / `clientId` / `appUrl`, reading auth state with `useAuth()` (`isLoading`, `isAuthenticated`, `user`, `session`) and calling its actions (`signIn`, `signOut`, `signInSilent`, `refreshSession`, `refetchUserInfo`, `getTokens`), rendering `<SignIn>` / `<SignUp>` / `<SignOut>` buttons (with `audience` / `idTokenHint` auth params) or `<Protected groups=…>` gates, mounting `<ProcessCallback>` on a dedicated callback route with `autoProcessCallback={false}`, accessing the underlying `MonoCloudWebJSClient` with `useClient()`, integrating with React Router via `postCallback`, or troubleshooting "useAuth used outside provider", StrictMode double-callbacks, popup-blocker / iframe issues, or `login_required` from silent sign-in.
+description: Use when integrating MonoCloud authentication into a React single-page application — installing or configuring `@monocloud/auth-react`, wrapping the tree in `<MonoCloudAuthProvider>` (`tenantDomain`, `clientId`, `appUrl`), reading `useAuth()` state (`isLoading`, `isAuthenticated`, `user`, `session`, `error`) and actions (`signIn`, `signOut`, `signInSilent`, `refreshSession`, `refetchUserInfo`, `getTokens`), rendering `<SignIn>` / `<SignUp>` / `<SignOut>` buttons or `<Protected groups=…>` gates, mounting `<ProcessCallback>` on a callback route with `autoProcessCallback={false}`, reaching the underlying `MonoCloudWebJSClient` via `useClient()`, React Router navigation via `postCallback`, or troubleshooting "useAuth() can only be used inside a <MonoCloudAuthProvider>", StrictMode double callbacks, `signIn` errors landing in `error`, render loops after `getTokens()`, popup blockers, `login_required` from silent sign-in, or `Session does not contain refresh token`.
 license: MIT
 ---
 
 # MonoCloud React SDK (`@monocloud/auth-react`)
 
-Authentication SDK for React single-page applications. Provides a context provider (`<MonoCloudAuthProvider>`), hooks (`useAuth`, `useClient`), and components (`<SignIn>`, `<SignUp>`, `<SignOut>`, `<Protected>`, `<ProcessCallback>`) wrapped around the browser implementation from `@monocloud/auth-web-js`.
+React provider, hooks and components for single-page apps, built on `@monocloud/auth-web-js` (OIDC Authorization Code + PKCE in the browser). It re-exports that package's client, storage adapters, error classes and most types.
 
-## Package identity — read this first
+## Package identity — read first
 
-**Use:** `@monocloud/auth-react` (this skill). The provider is `<MonoCloudAuthProvider>` and the hook is `useAuth`.
+Check `package.json` before suggesting code. Use **`@monocloud/auth-react`** for React SPAs without a server framework (Vite and similar).
 
-This is **not** the same SDK as:
+| Project | Use instead | Skill |
+| --- | --- | --- |
+| Next.js | `@monocloud/auth-nextjs` — its own `useAuth` is in `@monocloud/auth-nextjs/client`; never mix the two packages | `monocloud-auth-nextjs` |
+| Non-React browser app | `@monocloud/auth-web-js` | `monocloud-web-js` |
+| API validating bearer tokens | `@monocloud/backend-node` | `monocloud-auth-express`, `monocloud-auth-fastify` |
+| Server calling the Management API | `@monocloud/management` | `monocloud-management-js` |
 
-- `@monocloud/auth-web-js` — the underlying browser SDK this package wraps (skill: `monocloud-web-js`). Use it directly for non-React SPAs.
-- `@monocloud/auth-nextjs` — Next.js SDK with cookie-based server sessions, middleware, route protection (skill: `monocloud-auth-nextjs`). Has its own `useAuth` hook from `@monocloud/auth-nextjs/client` — **don't** mix the two; one or the other.
-- `@monocloud/backend-node` — server-side API token validation (skills: `monocloud-auth-express`, `monocloud-auth-fastify`).
-- `@monocloud/management` — server-only Management API client (skill: `monocloud-management-js`).
+- One entry point: import from `@monocloud/auth-react` — there are no subpaths (`/client`, `/components`, …). `MonoCloudOidcClient` and the `/utils` helpers are not re-exported; import those from `@monocloud/auth-web-js` (kept on the same release).
+- Not exported: `AuthProvider`, `MonoCloudProvider`, `useUser`, `useSession`, `useMonoCloud`, `withAuth`, `withAuthenticationRequired`, `loginWithRedirect`, `getAccessTokenSilently` — those are other SDKs' APIs.
+- No environment variables: configuration is provider props (with Vite, pass your own `import.meta.env.VITE_*` values).
+- Client-only: the entry is marked `'use client'` and all work happens in effects and event handlers.
 
-Pick this SDK for **React SPAs built with Vite / Create React App / a custom React setup that has no SSR/server framework**. If the app is Next.js, use `@monocloud/auth-nextjs` instead — it gives you cookie sessions, middleware, and server helpers this SDK doesn't have.
-
-## Installation
+## Install and dashboard setup
 
 ```bash
 npm install @monocloud/auth-react
 ```
 
-Peer deps: `react ^18.0.0 || ^19.2.3`, `react-dom ^18.3.1 || ^19.2.3`. Engines: Node `>=16`.
+Peer dependencies: `react` `^18.0.0 || ^19.2.3`, `react-dom` `^18.3.1 || ^19.2.3`.
 
-No environment variables — **all configuration is passed as props to `<MonoCloudAuthProvider>`**, which forwards them to the underlying `MonoCloudWebJSClient`.
+Create a **Single Page Application** client (public — never pass `clientSecret`) and register:
 
-## Prerequisites (in the MonoCloud dashboard)
-
-Configure the client as a **Single Page Application** with:
-
-- **Allowed Callback URLs:** the full URL the OP should redirect back to. If you use `autoProcessCallback` (default) this is typically just the app root (e.g. `http://localhost:5173`). If you mount `<ProcessCallback>` on a dedicated route, register `appUrl + callbackPath` (e.g. `http://localhost:5173/callback`).
-- **Allowed Sign-out URLs:** matches `appUrl + signOutPath` (or the app root if you didn't set one).
-- **Allowed Origins (CORS):** the bare origin of the app (e.g. `http://localhost:5173`).
-- **Scopes:** at minimum `openid`, `profile`, `email`. Add `offline_access` to get refresh tokens.
-
-SPAs are public clients — **never** ship a `clientSecret` prop in production. The option exists on the underlying client only for advanced confidential-client setups.
+- **Callback URLs**: `appUrl + callbackPath` with any trailing `/` removed — by default just the origin, e.g. `http://localhost:5173`.
+- **Sign-out URLs**: `appUrl + signOutPath` (default: the origin).
+- **Cross-Origin URLs**: the origin.
+- The SDK's example app also enables **Allow Access Tokens via the Browser** and **Allow Offline Access** (required for `offline_access` refresh tokens).
 
 ## Quick start
 
@@ -49,12 +46,12 @@ SPAs are public clients — **never** ship a `clientSecret` prop in production. 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MonoCloudAuthProvider } from '@monocloud/auth-react';
-import { App } from './App';
+import App from './App';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <MonoCloudAuthProvider
-      tenantDomain="https://<your-tenant>.us.monocloud.com"
+      tenantDomain="https://<your-tenant-domain>"
       clientId="<your-client-id>"
       defaultAuthParams={{ scopes: 'openid profile email offline_access' }}
     >
@@ -66,269 +63,189 @@ createRoot(document.getElementById('root')!).render(
 
 ```tsx
 // src/App.tsx
-import { SignIn, SignOut, Protected, useAuth } from '@monocloud/auth-react';
+import { useAuth, SignIn, SignUp, SignOut } from '@monocloud/auth-react';
 
-export function App() {
-  const { isLoading, isAuthenticated, user } = useAuth();
-  if (isLoading) return <p>Loading…</p>;
-  return (
-    <>
-      {!isAuthenticated ? <SignIn>Sign In</SignIn> : <SignOut>Sign Out</SignOut>}
-      <Protected fallback={<p>Sign in to view.</p>}>
-        <p>Hi {user?.email}</p>
-      </Protected>
-    </>
-  );
-}
-```
-
-By default the provider mounts, the SDK runs `processCallback()` once, and the auth state lights up automatically when the user returns from the OP.
-
-## Surface at a glance
-
-| Export                          | Kind        | Purpose                                                                                      |
-| ------------------------------- | ----------- | -------------------------------------------------------------------------------------------- |
-| `<MonoCloudAuthProvider>`       | Component   | Boots a single `MonoCloudWebJSClient` and exposes state + actions via context.               |
-| `useAuth()`                     | Hook        | Reads the auth state (`isLoading`, `isAuthenticated`, `user`, `session`, `error`) and exposes actions (`signIn`, `signOut`, `signInSilent`, `refreshSession`, `refetchUserInfo`, `getTokens`). |
-| `useClient()`                   | Hook        | Returns the underlying `MonoCloudWebJSClient` for low-level operations (e.g. `client.oidcClient.revokeToken`). |
-| `<SignIn>` / `<SignUp>`         | Component   | Renders a `<button>` that calls `signIn()` (with `signUp: true` for `<SignUp>`).             |
-| `<SignOut>`                     | Component   | Renders a `<button>` that calls `signOut()`.                                                 |
-| `<Protected>`                   | Component   | Client-side conditional render based on auth + optional group membership.                    |
-| `<ProcessCallback>`             | Component   | For dedicated callback routes. Use with `autoProcessCallback={false}` on the provider.       |
-| Re-exported from `auth-web-js`  | —           | `MonoCloudWebJSClient`, `LocalStorage`, `MemoryStorage`, `SessionStorage`, all 6 error classes, and the client/session/option types listed in `references/api-surface.md`. **Not** re-exported: `MonoCloudOidcClient` and the lower-level protocol types (`Jwks`, `IssuerMetadata`, `Tokens`, `CallbackParams`, `EndSessionParameters`, …) — import those from `@monocloud/auth-web-js`. |
-
-Everything in `@monocloud/auth-react` is client-only (every file starts with `'use client';`). Don't import from this package in a Server Component / RSC.
-
-## `<MonoCloudAuthProvider>` — provider props
-
-`MonoCloudAuthProviderProps` extends `MonoCloudWebJSClientOptions` (from `@monocloud/auth-web-js`), so every option the underlying client accepts can be passed as a prop.
-
-Required:
-
-| Prop           | Purpose                                                                                       |
-| -------------- | --------------------------------------------------------------------------------------------- |
-| `tenantDomain` | Your MonoCloud tenant URL, e.g. `https://acme.us.monocloud.com`.                              |
-| `clientId`     | OIDC client id (SPA client registered in the dashboard).                                      |
-| `children`     | The subtree that should see the auth context.                                                 |
-
-Common optional:
-
-| Prop                   | Default                  | Purpose                                                                                                    |
-| ---------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| `appUrl`               | `window.location.origin` (recommended to pass explicitly) | Used to build redirect URIs and validate cross-origin postMessages. |
-| `callbackPath`         | `/`                      | Relative path where MonoCloud redirects after sign-in. Must be in **Allowed Callback URLs**.               |
-| `signOutPath`  | `/`                      | Relative path where MonoCloud redirects after sign-out. Must be in **Allowed Sign-out URLs**.              |
-| `autoProcessCallback`  | `true`                   | When `true`, the provider runs `processCallback()` once on mount. Set to `false` to handle the callback on a dedicated route with `<ProcessCallback>`. |
-| `defaultAuthParams`    | —                        | Pre-set `scopes` / `resource` / `responseType` / `prompt`, etc., on every auth request.                   |
-| `resources`            | —                        | Additional `Indicator[]` for `getTokens()`.                                                                |
-| `storage`              | `new LocalStorage()`     | Session persistence: `LocalStorage`, `SessionStorage`, `MemoryStorage`, or your own `IStorage`.            |
-| `postCallback`         | full-page reload to `returnUrl` | Hook to integrate with a client-side router (React Router, TanStack Router, etc.) instead of a hard navigation. |
-| `onSessionCreating`    | —                        | Async hook to mutate the session as it is being created.                                                   |
-| `federatedSignOut`     | `true`                   | When `false`, `signOut()` only clears the local session without sending the user to MonoCloud.             |
-| `fetchUserinfo`        | `true`                   | When `false`, skip the UserInfo call after authentication.                                                 |
-| `validateIdToken`      | `true`                   | When `false`, skip ID token signature/claims validation. Not recommended.                                  |
-| `authWindowTimeout`    | `600` (sec)              | Timeout for popup / iframe auth windows.                                                                   |
-| `popupWindowWidth` / `popupWindowHeight` | `375` / `600` | Popup dimensions.                                                                           |
-| `clockSkew` / `clockTolerance` | `0` / `60` (sec) | ID token clock skew / tolerance.                                                                       |
-
-`<MonoCloudAuthProvider>` constructs the client **once** in `useState(() => new MonoCloudWebJSClient(props))` — props changes after the initial render do **not** rebuild the client. Treat all client-config props as bootstrap-time only. If you genuinely need to swap configuration at runtime, unmount and remount the provider (e.g. by `key`).
-
-## `useAuth()` — state + actions
-
-```tsx
-'use client';
-import { useAuth } from '@monocloud/auth-react';
-
-export function Profile() {
-  const {
-    isLoading, isAuthenticated, user, session, error,
-    signIn, signOut, signInSilent, refreshSession, refetchUserInfo, getTokens,
-  } = useAuth();
+export default function App() {
+  const { isLoading, isAuthenticated, user, error } = useAuth();
 
   if (isLoading) return <p>Loading…</p>;
-  if (error)     return <p>Error: {error.message}</p>;
-  if (!isAuthenticated) return <button onClick={() => signIn()}>Sign in</button>;
-
+  if (!isAuthenticated) {
+    return (
+      <>
+        <SignIn>Sign in</SignIn> <SignUp>Sign up</SignUp>
+        {error && <p>{error.message}</p>}
+      </>
+    );
+  }
   return (
     <>
       <p>Hi {user?.email}</p>
-      <button onClick={() => signOut()}>Sign out</button>
+      <SignOut>Sign out</SignOut>
     </>
   );
 }
 ```
 
-State shape (`AuthState` ⊂ `MonoCloudAuth`):
+On mount the provider runs `processCallback()` (finishing any sign-in or sign-out the browser is returning from) and loads the stored session; `isLoading` stays `true` until then. StrictMode's double effect is guarded, so the callback is processed once.
 
-| Field             | Type                          | Notes                                                                |
-| ----------------- | ----------------------------- | -------------------------------------------------------------------- |
-| `isLoading`       | `boolean`                     | `true` during bootstrap (`processCallback` + initial `getSession`) and during any in-flight `signIn`/`signOut`. |
-| `isAuthenticated` | `boolean`                     | `true` when a session exists.                                        |
-| `user`            | `MonoCloudUser \| undefined`  | ID-token claims + UserInfo claims (filtered).                        |
-| `session`         | `MonoCloudSession \| undefined` | Includes `idToken`, `accessTokens[]`, `refreshToken`, `authorizedScopes`. |
-| `error`           | `Error \| undefined`          | Last error from a `signIn`, `signOut`, or initial `processCallback`. |
+## `<MonoCloudAuthProvider>` props
 
-Action methods proxy to the underlying client; **all of them re-sync the auth state on success** (i.e., the next `useAuth()` read reflects the new session). They are stable across renders (memoized with `useCallback`).
+`MonoCloudAuthProviderProps` = every `MonoCloudWebJSClientOptions` field + `children` + `autoProcessCallback`.
 
-> `signIn()` and `signOut()` do **not** re-throw caught errors — they put the error on `state.error` and resolve. If you need imperative throw-on-failure semantics, use `useClient()` and call the client directly.
+| Prop | Default | Notes |
+| --- | --- | --- |
+| `tenantDomain`, `clientId` | required | Tenant URL (must equal the ID token's `iss`) and SPA client ID. |
+| `appUrl` | `window.location.origin` | Base for redirect URIs; popup/iframe messages must come from its origin. |
+| `callbackPath` / `signOutPath` | `/` | Where MonoCloud returns after sign-in / sign-out. |
+| `autoProcessCallback` | `true` | `false` hands callback processing to `<ProcessCallback>`. |
+| `defaultAuthParams` | — | Only `scopes`, `resource`, `responseType` are applied; pass `prompt`, `audience`, `loginHint`, … per call or as `<SignIn>` props. |
+| `resources` | — | Extra `{ resource, scopes? }` indicators: merged into sign-in, used by `getTokens({ resource })`. |
+| `storage` | `new LocalStorage()` | `SessionStorage`, `MemoryStorage`, or a custom `IStorage`. |
+| `postCallback` | URL cleanup, or a full page load to `returnUrl` | Router navigation — see [below](#react-router-navigation-postcallback). |
+| `onSessionCreating` | — | Mutate the session before it is stored. |
+| `federatedSignOut` | `true` | `false`: sign-out clears only the local session. |
+| `fetchUserinfo` / `validateIdToken` | `true` | |
+| `authWindowTimeout` | `600` s | Popup / silent-iframe timeout. |
 
-Calling a hook outside the provider throws `MonoCloudJsError: useAuth() can only be used inside a <MonoCloudAuthProvider>...`.
+Also accepted with the web-js defaults: `idTokenSigningAlgorithm`, `clockSkew`, `clockTolerance`, `popupWindowWidth`, `popupWindowHeight`, `sessionKey`, `filteredIdTokenClaims`, `jwksCacheDuration`, `metadataCacheDuration` (see the `monocloud-web-js` skill).
 
-## `useClient()` — escape hatch
+The client is built **once**, on first render: later prop changes — including `postCallback`, `onSessionCreating`, `storage`, `autoProcessCallback` — are ignored, and function props keep their first-render closures. Remount with a new `key` to reconfigure.
 
-For anything `useAuth()` does not cover — usually OIDC-level operations like token revocation, decoding, JWKS, or `client.oidcClient.*` calls — read the underlying `MonoCloudWebJSClient`:
+**Scopes:** `openid profile email` is requested only when no scopes are configured anywhere. Once you set `defaultAuthParams.scopes`, a per-call `scopes`, or `resources[].scopes`, include `openid profile email` (and `offline_access`) yourself.
+
+## `useAuth()`
+
+| Member | Notes |
+| --- | --- |
+| `isLoading` | `true` during bootstrap and while `signIn` / `signOut` run. |
+| `isAuthenticated` | A session exists in storage. |
+| `user` / `session` | `MonoCloudUser` / `MonoCloudSession` (`idToken`, `accessTokens[]`, `refreshToken`, `authorizedScopes`). Replaced by new objects after every action. |
+| `error` | Last failure of callback processing, `signIn` or `signOut`; cleared by the next successful action. |
+| `signIn(o?)` / `signOut(o?)` | Web-js options (`mode`, `returnUrl`, `scopes`, …). **Never reject** — failures go to `error`. |
+| `signInSilent(o?)` | Resolves to the session; **rejects** (`MonoCloudOPError` `login_required`, …). |
+| `refreshSession(o?)` / `refetchUserInfo()` | Reject on failure. |
+| `getTokens(o?)` | `{ accessToken, idToken, refreshToken, isExpired, … }`, refreshing first when needed; rejects on failure. |
+
+Every successful action re-reads the session and publishes it to context. The actions are stable across renders. Outside the provider it throws `MonoCloudJsError: useAuth() can only be used inside a <MonoCloudAuthProvider>...</MonoCloudAuthProvider>.`
 
 ```tsx
-'use client';
-import { useAuth, useClient } from '@monocloud/auth-react';
+const { getTokens } = useAuth();
 
-export function RevokeButton() {
-  const { getTokens } = useAuth();
-  const client = useClient();
-
-  const revoke = async () => {
-    const tokens = await getTokens();
-    await client.oidcClient.revokeToken(tokens.accessToken);
-  };
-
-  return <button onClick={revoke}>Revoke access token</button>;
+async function loadThings() {
+  const { accessToken } = await getTokens(); // refreshes when missing or expiring within 30 s
+  return fetch('https://api.example.com/things', { headers: { Authorization: `Bearer ${accessToken}` } });
 }
 ```
 
-`useClient()` returns the same `MonoCloudWebJSClient` instance the provider built; calling its methods directly **bypasses the state sync** that the `useAuth()` actions do. If you mutate the session via the raw client (e.g. you call `client.signOut()` instead of the hook's `signOut`), call any of the `useAuth` actions afterwards to re-sync (or simpler: just use the hook).
+For a second API, add `resources={[{ resource: 'https://api.example.com', scopes: 'read:data' }]}` to the provider and call `getTokens({ resource: 'https://api.example.com' })`.
+
+Restore an existing MonoCloud (SSO) session once at startup — `login_required` simply means "not signed in at MonoCloud" (or third-party cookies are blocked):
+
+```tsx
+import { useEffect, useRef } from 'react';
+import { useAuth, MonoCloudOPError } from '@monocloud/auth-react';
+
+export function useSilentSignIn() {
+  const { isLoading, isAuthenticated, signInSilent } = useAuth();
+  const tried = useRef(false);
+  useEffect(() => {
+    if (isLoading || isAuthenticated || tried.current) return;
+    tried.current = true;
+    signInSilent().catch(e => {
+      if (!(e instanceof MonoCloudOPError)) console.error(e);
+    });
+  }, [isLoading, isAuthenticated, signInSilent]);
+}
+```
 
 ## Components
 
-### `<SignIn>` / `<SignUp>`
-
-Render a `<button>` (forwards every `HTMLButtonElement` prop). When clicked it calls `signIn()` (with `signUp: true` for `<SignUp>`).
-
-```tsx
-import { SignIn, SignUp, SignOut } from '@monocloud/auth-react';
-
-<SignIn>Sign In</SignIn>
-<SignIn mode="popup" loginHint="alice@example.com">Sign in (popup)</SignIn>
-<SignIn authenticatorHint="google" className="btn btn-primary">Continue with Google</SignIn>
-<SignIn returnUrl="/dashboard">Sign in & go to dashboard</SignIn>
-<SignIn audience="https://api.example.com">Sign in (audience-scoped token)</SignIn>
-<SignIn idTokenHint={idToken} prompt="none">Silent re-auth</SignIn>
-<SignUp returnUrl="/welcome">Create account</SignUp>
-```
-
-`<SignIn>` accepts everything `SignInOptions` accepts (except `signUp`) plus button props. `<SignUp>` accepts the same minus `signUp`, `authenticatorHint`, `loginHint`, `prompt` (those are sign-in-only).
-
-### `<SignOut>`
+| Component | Renders | Props |
+| --- | --- | --- |
+| `<SignIn>` | `<button type="button">` → `signIn()` | `SignInOptions` except `signUp`: `mode`, `returnUrl`, `appState`, `scopes`, `resource`, `audience`, `prompt`, `loginHint`, `authenticatorHint`, `uiLocales`, `display`, `acrValues`, `maxAge`, `idTokenHint`; plus button attributes |
+| `<SignUp>` | button → `signIn({ signUp: true })` | as `<SignIn>` minus `authenticatorHint`, `loginHint`, `prompt` |
+| `<SignOut>` | button → `signOut()` | `mode`, `federatedSignOut`, `postLogoutRedirectUri`, `idTokenHint`, `returnUrl`; plus button attributes |
+| `<Protected>` | `children` when allowed | `fallback`, `groups`, `matchAllGroups`, `groupsClaim` (default `'groups'`), `onGroupAccessDenied(user)` |
+| `<ProcessCallback>` | `loading`, then `children` or `error` | see [Dedicated callback route](#dedicated-callback-route) |
 
 ```tsx
-<SignOut>Sign Out</SignOut>
-<SignOut mode="popup">Sign out (popup)</SignOut>
-<SignOut federatedSignOut={false}>Local sign out only</SignOut>
-<SignOut postLogoutRedirectUri="https://example.com/bye">Sign out and leave</SignOut>
-<SignOut idTokenHint={idToken}>Sign out with explicit id_token_hint</SignOut>
-```
+<SignIn mode="popup" authenticatorHint="google">Continue with Google</SignIn>
+<SignIn returnUrl="/dashboard" audience="https://api.example.com">Sign in</SignIn>
+<SignOut federatedSignOut={false}>Sign out of this app only</SignOut>
 
-Accepts every `SignOutOptions` field plus button props.
-
-> The render is a plain `<button>`. If you need an `<a>` or a custom element, ignore the components and call `signIn()` / `signOut()` from `useAuth()` directly in your own component.
-
-### `<Protected>` — client-side gate with optional groups
-
-```tsx
-import { Protected } from '@monocloud/auth-react';
-
-// auth-only
-<Protected fallback={<p>Sign in to view.</p>}>
-  <SecretContent />
+<Protected fallback={<p>Please sign in.</p>}>
+  <Dashboard />
 </Protected>
-
-// require ANY of these groups
-<Protected
-  groups={['admin']}
-  onGroupAccessDenied={user => <p>Not authorized: {user.email}</p>}
->
-  <AdminPanel />
-</Protected>
-
-// require ALL of these groups
-<Protected
-  groups={['admin', 'billing']}
-  matchAllGroups
-  onGroupAccessDenied={user => <p>Need both admin AND billing.</p>}
->
-  <SensitiveSettings />
-</Protected>
-
-// custom claim name (default is "groups")
-<Protected groups={['admin']} groupsClaim="roles">
-  <AdminPanel />
+<Protected groups={['admin', 'billing']} matchAllGroups onGroupAccessDenied={user => <p>{user.email} lacks access.</p>}>
+  <Billing />
 </Protected>
 ```
 
-Behavior matrix:
+- The buttons set `type="button"` and their own `onClick` (a passed `onClick` is ignored); `className`, `disabled`, `aria-*` and other attributes are forwarded. For custom click logic, call `useAuth().signIn()` yourself.
+- `<Protected>` renders nothing while loading; `fallback` (or nothing) when signed out or `error` is set; with `groups`, `children` only when the user's groups claim has any listed group (all of them with `matchAllGroups`), otherwise `onGroupAccessDenied(user)` (default: nothing). It only hides UI — enforce authorization in your API.
 
-| State                                | Renders                                  |
-| ------------------------------------ | ---------------------------------------- |
-| `isLoading`                          | `null`                                   |
-| Error / unauthenticated / no user    | `fallback` (or `null` if no `fallback`)  |
-| Authenticated, no `groups` prop      | `children`                               |
-| Authenticated, in required groups    | `children`                               |
-| Authenticated, not in required groups | `onGroupAccessDenied(user)` (default: `<></>`) |
+## Dedicated callback route
 
-> `<Protected>` only affects what is **rendered**. The component tree (children) is still in the bundle, and any data those components fetch will still hit the API. Enforce authorization on the API side as well (see `monocloud-auth-express` / `monocloud-auth-fastify`).
-
-### `<ProcessCallback>` — dedicated callback route
-
-By default, `<MonoCloudAuthProvider>` calls `processCallback()` itself on mount (the `autoProcessCallback` prop defaults to `true`) — there is **no need for a separate callback route** in most apps.
-
-If you do want one (e.g. an isolated `/callback` page that shows a "Completing sign in…" UI), set `autoProcessCallback={false}` on the provider and render `<ProcessCallback>` on that route:
+With the default `autoProcessCallback`, callbacks are processed on whatever route loads — no callback page needed. For a "Completing sign in…" page:
 
 ```tsx
-// main.tsx
-<MonoCloudAuthProvider
-  tenantDomain="https://<your-tenant>"
-  clientId="<your-client-id>"
-  callbackPath="/callback"
-  autoProcessCallback={false}
->
-  <RouterProvider router={router} />
-</MonoCloudAuthProvider>
+// src/main.tsx
+import { createRoot } from 'react-dom/client';
+import { createBrowserRouter, RouterProvider } from 'react-router';
+import { MonoCloudAuthProvider, ProcessCallback } from '@monocloud/auth-react';
 
-// pages/Callback.tsx
-import { ProcessCallback } from '@monocloud/auth-react';
-
-export default function Callback() {
+function Callback() {
   return (
-    <ProcessCallback
-      loading={<p>Completing sign in…</p>}
-      error={err => <p>Sign in failed: {err.message}</p>}
-    >
-      <p>Done — redirecting…</p>
+    <ProcessCallback loading={<p>Completing sign in…</p>} error={err => <p>Sign-in failed: {err.message}</p>}>
+      <p>Done.</p>
     </ProcessCallback>
   );
 }
+
+const router = createBrowserRouter([
+  { path: '/callback', element: <Callback /> },
+  // …other routes
+]);
+
+createRoot(document.getElementById('root')!).render(
+  <MonoCloudAuthProvider
+    tenantDomain="https://<your-tenant-domain>"
+    clientId="<your-client-id>"
+    callbackPath="/callback"
+    signOutPath="/callback"
+    autoProcessCallback={false}
+    postCallback={state => {
+      if (state.mode === 'redirect' || state.returnUrl) router.navigate(state.returnUrl ?? '/', { replace: true });
+    }}
+  >
+    <RouterProvider router={router} />
+  </MonoCloudAuthProvider>,
+);
 ```
 
-Pick one path — auto vs dedicated. Mounting `<ProcessCallback>` **without** setting `autoProcessCallback={false}` is wasteful (the provider also runs it) and can produce a brief duplicate-processing state.
+- With `autoProcessCallback={false}` nothing else processes callbacks: every path MonoCloud returns to (`callbackPath` and `signOutPath`; popup and silent flows land there too) must render `<ProcessCallback>`.
+- Never combine it with `autoProcessCallback` on: the second run finds nothing pending and briefly publishes a signed-out, not-loading state while the first is still exchanging the code.
+- `<ProcessCallback>` doesn't navigate — without a `postCallback` that does, the user stays on the callback page.
 
-Where the user lands **after** a successful callback is controlled by the provider-level `postCallback` prop, not by `<ProcessCallback>`. See "Integrating with a client-side router" below.
+## React Router navigation (`postCallback`)
 
-## Integrating with a client-side router (React Router / TanStack Router)
-
-The default `postCallback` performs a full page reload to `returnUrl` (set via `signIn({ returnUrl })`). That wipes Redux/Zustand/Jotai state and breaks `MemoryStorage`. With a client-side router, pass a `postCallback`:
+The default `postCallback` strips `?code=…&state=…` without reloading, but performs a **full page load** when `returnUrl` is set. To navigate with the router instead, either call a data router's `router.navigate()` (as above), or render the provider inside the router and use `useNavigate()`:
 
 ```tsx
-'use client';
+import type { ReactNode } from 'react';
+import { useNavigate } from 'react-router'; // or 'react-router-dom', matching your setup
 import { MonoCloudAuthProvider } from '@monocloud/auth-react';
-import { useNavigate } from 'react-router-dom';
 
-export function AuthShell({ children }: { children: React.ReactNode }) {
+export function AuthProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
-
   return (
     <MonoCloudAuthProvider
-      tenantDomain="https://<your-tenant>"
+      tenantDomain="https://<your-tenant-domain>"
       clientId="<your-client-id>"
-      postCallback={state => navigate(state.returnUrl ?? '/')}
+      postCallback={state => {
+        // also called after popup and silent sign-ins — only navigate for redirects or explicit returnUrls
+        if (state.mode === 'redirect' || state.returnUrl) navigate(state.returnUrl ?? '/', { replace: true });
+      }}
     >
       {children}
     </MonoCloudAuthProvider>
@@ -336,114 +253,42 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
 }
 ```
 
-For routers whose navigation hook is only available inside the `<Router>` subtree (the common case), place `<MonoCloudAuthProvider>` **inside** the router, not above it:
+## `useClient()`
 
-```tsx
-<BrowserRouter>
-  <AuthShell>{/* routes */}</AuthShell>
-</BrowserRouter>
-```
-
-`postCallback` runs after both sign-in and sign-out callbacks. `state.signOut` tells you which.
-
-## Access tokens for API calls
-
-```tsx
-'use client';
-import { useAuth } from '@monocloud/auth-react';
-
-export function FetchProtected() {
-  const { getTokens } = useAuth();
-
-  const handleClick = async () => {
-    const { accessToken } = await getTokens();
-    const res = await fetch('/api/things', {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    /* ... */
-  };
-
-  return <button onClick={handleClick}>Load things</button>;
-}
-```
-
-`getTokens()` transparently refreshes near-expired tokens via the Refresh Token Grant. It requires `offline_access` to be in the granted scopes at sign-in time — otherwise no refresh token is issued and the auto-refresh path throws `MonoCloudValidationError`. Set it on the provider:
-
-```tsx
-<MonoCloudAuthProvider
-  /* ... */
-  defaultAuthParams={{ scopes: 'openid profile email offline_access' }}
->
-```
-
-For audience-specific tokens, pre-register the resource and request via `getTokens`:
-
-```tsx
-<MonoCloudAuthProvider
-  /* ... */
-  resources={[{ resource: 'https://api.example.com', scopes: 'read:data write:data' }]}
->
-
-// ...
-
-const { accessToken } = await getTokens({ resource: 'https://api.example.com' });
-```
+Returns the provider's `MonoCloudWebJSClient`, for operations `useAuth()` doesn't wrap — e.g. `client.oidcClient.revokeToken(accessToken)`. Calls made on it don't update context: after a session-changing call (`client.signOut()`, `client.refreshSession()`, …) the UI stays stale until the next `useAuth()` action, so prefer the hook's actions. Outside the provider: `MonoCloudJsError: useClient() can only be used inside a <MonoCloudAuthProvider>...</MonoCloudAuthProvider>.`
 
 ## Errors
 
-All errors extend `MonoCloudAuthBaseError` (which extends `Error`). They are re-exported from `@monocloud/auth-web-js`. Use `instanceof` to branch. `MonoCloudHttpError` exposes `.status` / `.statusText`, and every error carries a `.raw` (`{ status, statusText, headers, body }`) when it was derived from an unsuccessful HTTP response.
+Re-exported from `@monocloud/auth-web-js` (same classes, so `instanceof` works across both packages):
 
-| Class                       | Thrown for                                                                                  |
-| --------------------------- | ------------------------------------------------------------------------------------------- |
-| `MonoCloudOPError`          | OAuth/OIDC error from the authorization server. Exposes `.error` and `.errorDescription`. Most common in this SDK: `login_required` from `signInSilent`, `access_denied` from a cancelled sign-in. |
-| `MonoCloudValidationError`  | Bad state — no session, missing refresh token, scopes/responseType mismatch.                |
-| `MonoCloudTokenError`       | Token operation failed (e.g. ID token validation).                                          |
-| `MonoCloudHttpError`        | Network / unexpected HTTP response talking to MonoCloud.                                    |
-| `MonoCloudJsError`          | Browser-environment failure (popup blocked, iframe in cross-origin-isolated context, hooks called outside provider, redirect attempted from inside an iframe, etc.). |
-| `MonoCloudAuthBaseError`    | Base class — catch this when you want to handle any SDK error generically.                  |
-
-For `signIn` / `signOut` (the hook actions), errors are surfaced on `state.error` rather than thrown. For `signInSilent` / `refreshSession` / `refetchUserInfo` / `getTokens` (and any direct `useClient()` calls), errors are thrown as usual:
-
-```tsx
-import { MonoCloudOPError } from '@monocloud/auth-react';
-
-const { signInSilent } = useAuth();
-
-useEffect(() => {
-  signInSilent().catch(e => {
-    if (e instanceof MonoCloudOPError && e.error === 'login_required') return;
-    console.error(e);
-  });
-}, [signInSilent]);
-```
+| Class | Raised for |
+| --- | --- |
+| `MonoCloudOPError` | Authorization-server errors: `.error` (also the `message` — `login_required`, `access_denied`, `invalid_grant`), `.errorDescription`. |
+| `MonoCloudValidationError` | SDK checks: no session, no refresh token, callback `state` mismatch. |
+| `MonoCloudTokenError` | ID-token validation (`Invalid Issuer`, `Nonce mismatch`, …) and UserInfo 401/403; `.code`. |
+| `MonoCloudHttpError` | Unexpected status or network/CORS failure (`.status` undefined then). |
+| `MonoCloudJsError` | Popup blocked/closed, window timeout, iframe restrictions, lock timeout, hooks or `<ProcessCallback>` outside the provider. |
+| `MonoCloudAuthBaseError` | Base class; `.raw` (`{ status, statusText, headers, body }`) on HTTP-derived errors. |
 
 ## Common pitfalls
 
-1. **Using `useAuth()` or `useClient()` outside the provider.** Throws `MonoCloudJsError: useAuth() can only be used inside a <MonoCloudAuthProvider>...`. Make sure the provider is an ancestor of every component that calls a hook.
-2. **Trying to reconfigure the provider by changing props.** The underlying `MonoCloudWebJSClient` is created **once** (on the provider's first render). Prop changes are ignored. To swap config, remount the provider with a new `key`.
-3. **Mounting `<ProcessCallback>` without `autoProcessCallback={false}`.** Both code paths run `processCallback()` — the second one is a no-op but adds an unnecessary loading flicker. Pick one.
-4. **Using this skill in a Next.js app.** Don't. Use `@monocloud/auth-nextjs` instead — it gives cookie sessions, middleware, and server helpers. This SDK is for plain React SPAs.
-5. **Forgetting `offline_access`.** Refresh tokens are only issued when `offline_access` is granted. Without it `refreshSession()` and the auto-refresh in `getTokens()` throw `MonoCloudValidationError`. Add it to `defaultAuthParams.scopes` (or pass via `<SignIn scopes="…">`).
-6. **`signIn({ mode: 'popup' })` from `useEffect`.** Browsers block popups not opened from a user gesture. Call inside a click handler — the `<SignIn>` component already does this correctly; if you call `signIn` yourself, do it from `onClick`, not `useEffect`.
-7. **Mismatched dashboard URLs.** `appUrl + callbackPath` (and `appUrl + signOutPath`) must exactly match the dashboard entries — including scheme, host, port, path. Same for the CORS origin.
-8. **`MemoryStorage` + default `postCallback` + a `returnUrl`.** When a `returnUrl` was set, the default `postCallback` does `window.location.href = returnUrl` — a full page reload that empties memory and drops the just-created session (with no `returnUrl` it only strips the callback query params via `history.replaceState`, which is safe). Either keep the default `LocalStorage`/`SessionStorage` or pass a `postCallback` that navigates with your router (no reload).
-9. **Wrapping the provider above `<BrowserRouter>` when `postCallback` uses `useNavigate`.** `useNavigate` only works inside `<BrowserRouter>`. Put the provider **inside** the router subtree.
-10. **Shipping a `clientSecret` prop.** SPAs are public clients. Don't pass `clientSecret` — the bundle is public and the secret leaks.
-11. **Calling `client.signOut()` from `useClient()` and expecting `isAuthenticated` to flip.** The raw client does not re-sync the context — use the hook's `signOut`, or call any other `useAuth` action afterwards to re-sync.
-12. **Treating `<Protected>` as a security boundary.** It only gates what is rendered. The children code is still in the bundle, and anything they fetch still hits the API. Enforce on the server.
+1. **Hooks or `<ProcessCallback>` outside `<MonoCloudAuthProvider>`** — throws `MonoCloudJsError`.
+2. **`try { await signIn() } catch`** — never catches; read `error` from `useAuth()`.
+3. **Effects that depend on `user` / `session` and call an action** (`getTokens`, `refetchUserInfo`, …) — every action publishes new objects, so the effect re-runs forever. Depend on `isAuthenticated` or `user?.sub`.
+4. **`<ProcessCallback>` with `autoProcessCallback` on** (transient signed-out state), or **`autoProcessCallback={false}` without `<ProcessCallback>`** on the return routes (callbacks never complete).
+5. **Changing provider props at runtime** — ignored; remount with `key`.
+6. **Using this package in Next.js** — use `@monocloud/auth-nextjs`.
+7. **No `offline_access`**, or **scopes without `openid`** — no refresh token / no profile.
+8. **`defaultAuthParams.prompt` / `audience` / `loginHint`** — not applied; pass per call or as `<SignIn>` props.
+9. **A `postCallback` that always navigates** — it also fires after `signInSilent()` and popup sign-ins.
+10. **`useNavigate()` in a provider wrapper above the router** — React Router throws; put the provider inside the router.
+11. **Popup sign-in from `useEffect` or after an `await`** — blocked by the browser; `<SignIn mode="popup">` is fine.
+12. **`storage={new MemoryStorage()}` with the default `postCallback` and a `returnUrl`** — the full page load wipes the session.
+13. **A `clientSecret` prop** — it ships in the bundle; SPA clients are public.
+14. **Treating `<Protected>` as security** — it only hides UI.
 
-## Onboarding checklist for a fresh integration
+## Verify and go deeper
 
-1. `npm install @monocloud/auth-react`.
-2. In the MonoCloud dashboard, configure the client as a **Single Page Application** and register the Callback URL, Sign-out URL, and Allowed Origin matching the dev origin (e.g. `http://localhost:5173`). Enable **Allow Access Tokens via the Browser** and **Allow Offline Access** if you need refresh tokens.
-3. Wrap the root render in `<MonoCloudAuthProvider tenantDomain={…} clientId={…} defaultAuthParams={{ scopes: 'openid profile email offline_access' }}>`.
-4. Read auth state with `useAuth()`; gate UI with `<Protected fallback={…}>`; add `<SignIn>` / `<SignOut>` (or `<SignUp>`) buttons where needed.
-5. For protected fetches, call `getTokens()` from `useAuth()` and send `accessToken` in the `Authorization` header.
-6. (Optional) For a dedicated callback route, set `autoProcessCallback={false}` and render `<ProcessCallback>` on that route.
-7. (Optional) For client-side-router navigation after callbacks, pass `postCallback={state => navigate(state.returnUrl ?? '/')}`.
-8. Run `node skills/monocloud-auth-react/scripts/verify.js` to sanity-check dependency wiring and provider/hook usage.
-
-## Deeper reference
-
-- [`references/api-surface.md`](references/api-surface.md) — every export, full provider prop shape, hook return type, component prop shapes, error classes.
-- [`references/troubleshooting.md`](references/troubleshooting.md) — extended symptom → cause → fix index covering StrictMode double-callbacks, "useAuth outside provider," popup blockers, iframe / cross-origin issues, refresh-token gotchas, hooks-outside-router pitfalls, and training-data SDK ghosts.
+- [`scripts/verify.js`](scripts/verify.js) — run `node scripts/verify.js [project-dir]` from this skill's folder: checks the dependency and React peers, imports against the real exports, provider and `<ProcessCallback>` wiring, `useClient()` misuse, effect loops, popups in effects, placeholders, `clientSecret`, browser-exposed secrets in `.env*`, Vite env usage, `MemoryStorage` and `offline_access`.
+- [`references/api-surface.md`](references/api-surface.md) — every export, provider lifecycle, hook and component signatures, errors.
+- [`references/troubleshooting.md`](references/troubleshooting.md) — symptom → cause → fix for React-specific issues; browser-client issues (callback URLs, popups, silent sign-in, ID-token errors) are covered by the `monocloud-web-js` skill's troubleshooting.

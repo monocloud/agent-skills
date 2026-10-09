@@ -1,122 +1,76 @@
 # `MonoCloud.Management` — API surface
 
-Exhaustive method-by-method surface for the `MonoCloud.Management` NuGet package, verified against `src/management/src/` and `src/core/` on **`MonoCloud.Management@0.2.11`** (repo HEAD `245acc4`, tag `v0.2.11`, clean tree). Signatures are listed **verbatim** from the client source, including default parameter values and the trailing `CancellationToken cancellationToken = default`. IDE intellisense (go-to-definition) is the source of truth for the fields of request/response DTOs under `MonoCloud.Management.Models`.
+Verified against `MonoCloud.Management@0.3.0` (`monocloud/management-dotnet` @ `b99754f`).
 
-## Quick reference
-
-The surface most apps actually reach for — full method lists and gotchas follow below.
-
-- Entry points: `new MonoCloudManagementClient(MonoCloudConfig)` (or the `HttpClient` overload), or the DI extension `services.AddMonoCloudManagementClient(IConfiguration | Action<MonoCloudManagementOptions>)`.
-- Resource clients (10): `.Users`, `.Clients`, `.Groups`, `.Resources`, `.Keys`, `.Logs`, `.NetworkZones`, `.Options`, `.Branding`, `.TrustStores`.
-- Most-used methods: `Users.GetAllUsersAsync / CreateUserAsync / FindUserByIdAsync / PatchClaimsAsync / PatchPrivateDataAsync / PatchPublicDataAsync / DisableUserAsync / EnableUserAsync / ChangePasswordAsync`, `Clients.GetAllApplicationsAsync / CreateApplicationAsync / PatchApplicationAsync`, `Groups.GetAllGroupsAsync / CreateGroupAsync`, `Keys.GetAllKeyMaterialsAsync`, `Logs.GetAllLogsAsync`, `Resources.GetAllApiResourcesAsync`.
-- Response wrappers: `MonoCloudResponse<T>` (`.Data`, `.Status`, `.Headers`) and `MonoCloudResponse<T, TPage>` (adds `.PageData`). Body is **`Data`** (not `Result`); status is **`Status`** (not `StatusCode`).
-- Errors: subclasses of `MonoCloudRequestException` — `MonoCloudNotFoundException`, `MonoCloudConflictException`, `MonoCloudIdentityValidationException`, … Base `MonoCloudException` has no `StatusCode`; branch with `catch (MonoCloudNotFoundException) { … }` or read `(ex as MonoCloudRequestException)?.Response?.Status`.
-- **No environment variables.** The .NET SDK does no env fallback — config comes from the `MonoCloud:Management` config section, a `MonoCloudManagementOptions` action, or a directly-built `MonoCloudConfig`. (You may still feed those values from env through standard .NET `IConfiguration` providers.)
-- Common gotchas: `Clients.*` methods operate on the **`Application`** model (there is no `Client` model); every `Patch…Request` uses `Optional<T>` so PATCH is a true partial update; identifier params are path-only and never in the patch body; some `Resources` methods take `(scopeId, apiId)` / `(secretId, apiId)` order — copy signatures verbatim.
+Entry points, envelopes, exceptions, and every resource-client method. For the fields of request/response models, use go-to-definition on the `MonoCloud.Management.Models` types.
 
 ## Namespaces
-
-The public surface is split across these namespaces (the package does **not** publish a single global `using`):
 
 | Namespace | Types |
 |---|---|
 | `MonoCloud.Management` | `MonoCloudManagementClient`, `MonoCloudManagementOptions`, `MonoCloudManagementServiceExtensions` |
-| `MonoCloud.Management.Core.Base` | `MonoCloudConfig`, `MonoCloudResponse`, `MonoCloudResponse<T>`, `MonoCloudResponse<T, TPage>`, `MonoCloudClientBase` |
-| `MonoCloud.Management.Core.Exception` | `MonoCloudException` and every `MonoCloud*Exception` subclass |
-| `MonoCloud.Management.Core.Models` | `ProblemDetails`, `IdentityValidationProblemDetails`, `KeyValidationProblemDetails`, `IdentityError` |
-| `MonoCloud.Management.Core.Helpers` | `PageModel`, `Optional<T>`, `IOptional` (plus JSON converters — rarely referenced directly) |
 | `MonoCloud.Management.Clients` | `UsersClient`, `ClientsClient`, `GroupsClient`, `ResourcesClient`, `KeysClient`, `LogsClient`, `NetworkZonesClient`, `OptionsClient`, `BrandingClient`, `TrustStoresClient` |
-| `MonoCloud.Management.Models` | All request / response DTOs (`User`, `CreateUserRequest`, `Application`, `Group`, `ApiResource`, `Log`, `KeyMaterial`, …) and enums (`ApplicationTypes`, `GrantTypes`, `ExternalAuthenticators`, …) — 230 model files |
+| `MonoCloud.Management.Models` | Request/response models and enums (`User`, `CreateUserRequest`, `Application`, `PatchApplicationRequest`, `Group`, `Log`, `ApplicationTypes`, `GrantTypes`, `ExternalAuthenticators`, …) |
+| `MonoCloud.Management.Core.Base` | `MonoCloudConfig`, `MonoCloudResponse`, `MonoCloudResponse<TResult>`, `MonoCloudResponse<TResult, TPage>`, `MonoCloudClientBase` |
+| `MonoCloud.Management.Core.Exception` | `MonoCloudException` and its subclasses, `ValidationExceptionTypes` |
+| `MonoCloud.Management.Core.Models` | `ProblemDetails`, `IdentityValidationProblemDetails`, `KeyValidationProblemDetails`, `IdentityError` |
+| `MonoCloud.Management.Core.Helpers` | `PageModel`, `Optional<T>`, `IOptional`, `PatchConverter<T>`, `SnakeCaseNamingPolicy`, epoch `DateTime` converters |
 
-Most consumer files will need at least `MonoCloud.Management`, `MonoCloud.Management.Core.Base`, `MonoCloud.Management.Core.Exception`, and `MonoCloud.Management.Models`. Project-wide `global using` declarations (.NET 6+) keep this tidy.
+The package adds no global usings to consuming projects; import the namespaces you use.
 
-## Top-level exports
-
-.NET has no barrel/index file — every `public` type across the `MonoCloud.Management` assembly and the referenced `MonoCloud.Management.Core` assembly is exported. The handful you actually reference by name:
-
-```csharp
-using MonoCloud.Management;                 // MonoCloudManagementClient, MonoCloudManagementOptions,
-                                            // MonoCloudManagementServiceExtensions (DI)
-using MonoCloud.Management.Core.Base;       // MonoCloudConfig, MonoCloudResponse<…>
-using MonoCloud.Management.Core.Exception;  // MonoCloudException + subclasses
-using MonoCloud.Management.Core.Helpers;    // PageModel, Optional<T>
-using MonoCloud.Management.Models;          // request/response DTOs + enums
-using MonoCloud.Management.Clients;         // UsersClient, etc. (only if referenced by name)
-```
-
-## Main client
+## Entry points
 
 ```csharp
-public class MonoCloudManagementClient   // namespace MonoCloud.Management
+// namespace MonoCloud.Management
+public class MonoCloudManagementClient
 {
     public MonoCloudManagementClient(MonoCloudConfig configuration);
     public MonoCloudManagementClient(HttpClient httpClient);
 
-    public BrandingClient     Branding     { get; }
-    public ClientsClient      Clients      { get; }
-    public GroupsClient       Groups       { get; }
-    public KeysClient         Keys         { get; }
-    public LogsClient         Logs         { get; }
+    public BrandingClient Branding { get; }
+    public ClientsClient Clients { get; }
+    public GroupsClient Groups { get; }
+    public KeysClient Keys { get; }
+    public LogsClient Logs { get; }
     public NetworkZonesClient NetworkZones { get; }
-    public OptionsClient      Options      { get; }
-    public ResourcesClient    Resources    { get; }
-    public TrustStoresClient  TrustStores  { get; }
-    public UsersClient        Users        { get; }
+    public OptionsClient Options { get; }
+    public ResourcesClient Resources { get; }
+    public TrustStoresClient TrustStores { get; }
+    public UsersClient Users { get; }
 }
-```
 
-- `MonoCloudManagementClient(MonoCloudConfig configuration)` — `configuration` must be non-null with non-empty `Domain` and `ApiKey` (validated in `MonoCloudClientBase`; otherwise `MonoCloudException`). Builds an internal `HttpClient` with `BaseAddress = "{Domain}/api/"`, `Timeout = config.Timeout`, and header `X-API-KEY: {ApiKey}`.
-- `MonoCloudManagementClient(HttpClient httpClient)` — bring your own `HttpClient`; a null argument throws `MonoCloudException`. You own `BaseAddress` (must end with `/api/`) and the `X-API-KEY` header — `MonoCloudConfig` validation/setup is bypassed. Useful for custom handlers, Polly policies, proxies, mTLS, or test doubles.
+public class MonoCloudManagementOptions
+{
+    public string? Domain { get; set; }
+    public string? ApiKey { get; set; }
+    public TimeSpan? Timeout { get; set; }
+}
 
-Every resource client derives from the (public, but protected-constructor) `MonoCloudClientBase` in `MonoCloud.Management.Core.Base` — only relevant if you implement a custom subclass.
+public static class MonoCloudManagementServiceExtensions
+{
+    public static IServiceCollection AddMonoCloudManagementClient(this IServiceCollection services, IConfiguration configuration);
+    public static IServiceCollection AddMonoCloudManagementClient(this IServiceCollection services, Action<MonoCloudManagementOptions> options);
+    public static IServiceCollection AddMonoCloudManagementClient(this IServiceCollection services, IConfiguration? configuration, Action<MonoCloudManagementOptions>? options);
+}
 
-## Configuration
-
-```csharp
-public class MonoCloudConfig   // namespace MonoCloud.Management.Core.Base
+// namespace MonoCloud.Management.Core.Base
+public class MonoCloudConfig
 {
     public MonoCloudConfig(string domain, string apiKey, TimeSpan? timeout = null);
 
-    public string   Domain  { get; }   // normalized: prepends https:// if missing, strips trailing slash
-    public string   ApiKey  { get; }
-    public TimeSpan Timeout { get; }    // defaults to TimeSpan.FromSeconds(10) when null
-}
-
-public class MonoCloudManagementOptions   // namespace MonoCloud.Management
-{
-    public string?   Domain  { get; set; }
-    public string?   ApiKey  { get; set; }
-    public TimeSpan? Timeout { get; set; }
+    public string Domain { get; }     // "https://" prepended unless it already starts with it; one trailing "/" removed
+    public string ApiKey { get; }
+    public TimeSpan Timeout { get; }  // TimeSpan.FromSeconds(10) when timeout is null
 }
 ```
 
-## DI extension
+| Construction | Validation | HTTP setup |
+|---|---|---|
+| `new MonoCloudManagementClient(MonoCloudConfig)` | `null` config → `MonoCloudException("Configuration is required")`; blank `ApiKey` → `MonoCloudException("API Key is required")`. `MonoCloudConfig` itself doesn't validate (see [troubleshooting](troubleshooting.md#startup-and-construction-exceptions) for bad domains) | Each of the ten resource clients creates its own `HttpClient`: `BaseAddress = {Domain}/api/`, `Timeout`, `X-API-KEY` default header |
+| `new MonoCloudManagementClient(HttpClient)` | `null` → `MonoCloudException("HttpClient is required")` | The one client is shared as-is: you set `BaseAddress` (`…/api/`, trailing slash) and `X-API-KEY`; its own `Timeout` applies |
+| `AddMonoCloudManagementClient(…)` | Reads `MonoCloud:Management` → `Domain`, `ApiKey`, `Timeout` (`int.TryParse`, seconds); non-null option values override (`Timeout` cast to whole seconds); empty `Domain` / `ApiKey` → `ArgumentNullException` at registration | Named client `"MonoCloudManagementClient"` (base address, timeout, header); `MonoCloudManagementClient` registered **transient** as `new MonoCloudManagementClient(factory.CreateClient("MonoCloudManagementClient"))` |
 
-```csharp
-public static class MonoCloudManagementServiceExtensions   // namespace MonoCloud.Management
-{
-    public static IServiceCollection AddMonoCloudManagementClient(
-        this IServiceCollection services, IConfiguration configuration);
-
-    public static IServiceCollection AddMonoCloudManagementClient(
-        this IServiceCollection services, Action<MonoCloudManagementOptions> options);
-
-    public static IServiceCollection AddMonoCloudManagementClient(
-        this IServiceCollection services,
-        IConfiguration? configuration,
-        Action<MonoCloudManagementOptions>? options);
-}
-```
-
-Behavior:
-
-- Reads the `MonoCloud:Management` section (`Domain`, `ApiKey`, `Timeout` — the latter an integer **seconds**, parsed via `int.TryParse`).
-- When both a configuration and an options action are supplied, **the options values override configuration** when set.
-- Throws `ArgumentNullException` at startup if `Domain` or `ApiKey` is missing/empty after merging.
-- Registers a named `HttpClient` (`"MonoCloudManagementClient"`) via `AddHttpClient`, configured with `BaseAddress = "{Domain}/api/"`, `Timeout`, and the `X-API-KEY` header.
-- Registers `MonoCloudManagementClient` as **Transient**, built from `IHttpClientFactory.CreateClient("MonoCloudManagementClient")`.
-
-Consume it by injecting `MonoCloudManagementClient` into your services/controllers.
+Each resource client (namespace `MonoCloud.Management.Clients`) derives from `MonoCloudClientBase` and has the same public `(MonoCloudConfig)` and `(HttpClient)` constructors, so one can also be used on its own.
 
 ## Response envelopes
 
@@ -124,429 +78,369 @@ Consume it by injecting `MonoCloudManagementClient` into your services/controlle
 // namespace MonoCloud.Management.Core.Base
 public class MonoCloudResponse
 {
-    public int Status { get; }                                         // HTTP status code
-    public IDictionary<string, IEnumerable<string>> Headers { get; }   // merged response headers
+    public int Status { get; }
+    public IDictionary<string, IEnumerable<string>> Headers { get; }   // response + content headers
 }
 
 public class MonoCloudResponse<TResult> : MonoCloudResponse
 {
-    public TResult Data { get; }   // deserialized response body
+    public TResult Data { get; }
 }
 
-public class MonoCloudResponse<TResult, TPage> : MonoCloudResponse<TResult>
-    where TPage : PageModel
+public class MonoCloudResponse<TResult, TPage> : MonoCloudResponse<TResult> where TPage : PageModel
 {
-    public TPage PageData { get; }   // pagination metadata; TPage is always PageModel
+    public TPage PageData { get; }   // TPage is PageModel on every paginated method
 }
-```
 
-> The body property is **`Data`**, not `Result`. The status property is **`Status`**, not `StatusCode`. `Headers` is `IDictionary<string, IEnumerable<string>>`, not a flat string map. Void/no-body operations (Delete/Revoke/Rotate/Ban-removal) return the bare `MonoCloudResponse` — read `.Status`/`.Headers` only, there is no `.Data`.
-
-```csharp
-public class PageModel   // namespace MonoCloud.Management.Core.Helpers
+// namespace MonoCloud.Management.Core.Helpers
+public class PageModel
 {
-    public int  PageSize    { get; set; }
-    public int  CurrentPage { get; set; }
-    public int  TotalCount  { get; set; }
+    public int PageSize { get; set; }
+    public int CurrentPage { get; set; }
+    public int TotalCount { get; set; }
     public bool HasPrevious { get; set; }
-    public bool HasNext     { get; set; }
+    public bool HasNext { get; set; }
 }
 ```
 
-`PageData` is populated from the `x-pagination` response header (JSON). When the header is absent, `PageData` is a default (zeroed) `PageModel` — never `null`.
+`PageData` is parsed from the JSON `x-pagination` response header; without the header it is a zero-valued `PageModel`. A 2xx body that deserializes to `null` throws `MonoCloudException("Invalid response body")`.
 
-## Exception hierarchy
-
-All live in `MonoCloud.Management.Core.Exception`.
+## Exceptions
 
 ```csharp
-public class MonoCloudException : System.Exception { }              // base; config/transport/deserialization errors
-public class MonoCloudRequestException : MonoCloudException          // base for HTTP-status errors (protected ctors)
+// namespace MonoCloud.Management.Core.Exception
+public class MonoCloudException : System.Exception { }
+
+public class MonoCloudRequestException : MonoCloudException              // protected constructors
 {
-    public ProblemDetails? Response { get; }   // set when the server sent application/problem+json
+    public ProblemDetails? Response { get; }   // null when the body wasn't application/problem+json
 }
 
-public class MonoCloudBadRequestException        : MonoCloudRequestException { }   // 400
-public class MonoCloudUnauthorizedException      : MonoCloudRequestException { }   // 401 (bad/missing X-API-KEY)
-public class MonoCloudPaymentRequiredException   : MonoCloudRequestException { }   // 402 (subscription/billing)
-public class MonoCloudForbiddenException         : MonoCloudRequestException { }   // 403 (feature not on plan)
-public class MonoCloudNotFoundException          : MonoCloudRequestException { }   // 404
-public class MonoCloudConflictException          : MonoCloudRequestException { }   // 409
+public abstract class MonoCloudCodedException : MonoCloudRequestException
+{
+    public string? ErrorCode => Response?.ErrorCode;
+}
 
-public class MonoCloudIdentityValidationException : MonoCloudRequestException      // 422 (identity-validation-error)
+public class MonoCloudBadRequestException : MonoCloudCodedException { }          // 400
+public class MonoCloudPaymentRequiredException : MonoCloudCodedException { }     // 402
+public class MonoCloudForbiddenException : MonoCloudCodedException { }           // 403
+public class MonoCloudNotFoundException : MonoCloudCodedException { }            // 404
+public class MonoCloudConflictException : MonoCloudCodedException { }            // 409
+public class MonoCloudUnauthorizedException : MonoCloudRequestException { }      // 401
+public class MonoCloudIdentityValidationException : MonoCloudRequestException    // 422
 {
-    public IEnumerable<IdentityError> Errors { get; }   // Code + Description
+    public IEnumerable<IdentityError> Errors { get; set; }   // IdentityError: string Code, string Description
 }
-public class MonoCloudKeyValidationException     : MonoCloudRequestException       // 422 (validation-error)
+public class MonoCloudKeyValidationException : MonoCloudRequestException         // 422
 {
-    public IDictionary<string, string[]> Errors { get; }   // field -> messages
+    public IDictionary<string, string[]> Errors { get; set; }   // field → messages
 }
-public class MonoCloudModelStateException        : MonoCloudRequestException { }   // 422 (non-problem+json fallback)
-public class MonoCloudResourceExhaustedException : MonoCloudRequestException { }   // 429 (rate limited)
-public class MonoCloudServerException            : MonoCloudRequestException { }   // >= 500
+public class MonoCloudModelStateException : MonoCloudRequestException { }        // 422, non-problem+json body
+public class MonoCloudResourceExhaustedException : MonoCloudRequestException { } // 429
+public class MonoCloudServerException : MonoCloudRequestException { }            // >= 500
+
+// namespace MonoCloud.Management.Core.Models — read with the SDK's case-sensitive snake_case policy
+public class ProblemDetails
+{
+    public string Type { get; set; }         // Type, Title, Detail, Instance, TraceId default to string.Empty
+    public string Title { get; set; }
+    public int Status { get; set; }
+    public string Detail { get; set; }
+    public string Instance { get; set; }
+    public string? ErrorCode { get; set; }   // "error_code"
+    public string TraceId { get; set; }      // "trace_id"
+    [JsonExtensionData]
+    public IDictionary<string, object> ExtensionData { get; set; }   // any other member, as a JsonElement
+}
 ```
 
-`MonoCloudException` exposes the standard `.Message` only — it has **no** `StatusCode` property. Branch on the subclass (`catch (MonoCloudNotFoundException) { … }`) or read `(ex as MonoCloudRequestException)?.Response?.Status`. The `Response` (`ProblemDetails`) and the two 422 `Errors` shapes live in `MonoCloud.Management.Core.Models` (`ProblemDetails`, `IdentityValidationProblemDetails`, `KeyValidationProblemDetails`, `IdentityError`).
+How a non-2xx response is mapped:
 
-## Method conventions
+- **`application/problem+json` body** — mapped on the body's `status`: 400/401/402/403/404/409/429/≥ 500 as above. A 422 becomes `MonoCloudIdentityValidationException` when `type` is `https://httpstatuses.io/422#identity-validation-error` and `MonoCloudKeyValidationException` when it is `https://httpstatuses.io/422#validation-error` (constants in `ValidationExceptionTypes`). The message is `Title`; the validation exceptions append the serialized `Errors`.
+- **Any other body** — mapped on the HTTP status (422 → `MonoCloudModelStateException`); `Response` is `null` and the message is the response text, or the status name when the body is empty.
+- **Unmapped** — any other status, or a 422 problem with a different `type`, throws a plain `System.Exception`.
+- **Not wrapped** — `HttpRequestException`, timeout `TaskCanceledException`, and `JsonException` (malformed JSON) propagate as-is. `MonoCloudException` itself is thrown for construction errors, a `null` success body (`"Invalid response body"`), and a `null` problem body (`"Invalid body"`).
 
-- Every resource-client method is `async`, PascalCase + `Async`, with a trailing `CancellationToken cancellationToken = default`.
-- Pagination parameters are `int? page = 1, int? size = 10`. `filter` and `sort` (where supported) are `string?` defaulting to `null`.
-- Paginated lists return `MonoCloudResponse<List<T>, PageModel>`; non-paginated lists return `MonoCloudResponse<List<T>>` (no `PageData`); single objects return `MonoCloudResponse<T>`; void operations return `MonoCloudResponse`.
-- Subscription gates are annotated inline as **[Pro]**, **[Secure+]**, or **[ScaleX]** — see [Subscription tiers](#subscription-tiers). Unannotated methods carry no tier gate in source.
+Only 400, 402, 403, 404, and 409 carry an `error_code`. Codes are opaque strings; the SDK defines no constants for them.
 
----
+`MonoCloudClientBase` has `protected virtual void ThrowProblem(ProblemDetails problem)`, a seam for SDKs built on this core to throw narrower exceptions (which must derive from `MonoCloudException`); if an override returns without throwing, a generic `MonoCloudException` is thrown for the status. Application code doesn't call it.
 
-## `client.Users` — `UsersClient`
+## Requests and JSON
 
-Users: CRUD, enable/disable/unblock, identifiers (email/phone/username), passkeys, passwords, claims, private/public data, blocked IPs, sessions, group membership, and grants/tokens.
+- **PATCH bodies.** Top-level `Patch*Request` types and `UpdateClaimsRequest` carry `[JsonConverter(typeof(PatchConverter<T>))]`, and their properties are `Optional<T>` (`readonly struct`: `HasValue`, `Value`, implicit conversion from `T`). Only assigned properties are written, so unassigned fields stay unchanged and an assigned `null` clears the field. Nested `Patch*Request` objects (e.g. `PatchAuthenticatorOptionsRequest` inside `PatchAuthenticationOptionsRequest`) behave the same; `PatchScopeClaimRequest`, the item type of `PatchScopeRequest.UserClaims`, is a plain class.
+- **Ids are path-only.** No patch request has an id property. `ApiResource.Audience` and the `Name` of API scopes, identity scopes, and claim resources can't be patched; `PatchGroupRequest.Name` exists, so groups can be renamed.
+- **User data.** `UpdatePrivateDataRequest.PrivateData` / `UpdatePublicDataRequest.PublicData` are `Dictionary<string, object>`: the keys you send are merged and a `null` value removes a key. `UpdateClaimsRequest` removes a claim that is set to `null`.
+- **Other request bodies** omit `null` properties (`JsonIgnoreCondition.WhenWritingNull`).
+- **Conventions.** Property names are snake_case (`SnakeCaseNamingPolicy`, case-sensitive when reading); enums are snake_case strings (`ApplicationTypes.WebApp` ↔ `"web_app"`; numeric values are rejected); `DateTime` values are Unix epoch seconds, read back as UTC.
 
-Lifecycle:
+## Ids
 
-- `GetAllUsersAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<UserSummary>, PageModel>>`
-- `CreateUserAsync(CreateUserRequest createUserRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `FindUserByIdAsync(string userId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `DeleteUserAsync(string userId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-- `EnableUserAsync(string userId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `DisableUserAsync(string userId, DisableUserRequest disableUserRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `UnblockUserAsync(string userId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
+`groupId`, `identifierId`, and `logId` are `Guid`; every other id parameter is a `string`.
 
-Username:
-
-- `UpdateUsernameAsync(string userId, UpdateUsernameRequest updateUsernameRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `RemoveUsernameAsync(string userId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-
-Emails (identifier id is a `Guid`):
-
-- `AddEmailAsync(string userId, AddEmailRequest addEmailRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `RemoveEmailAsync(string userId, Guid identifierId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `SetPrimaryEmailAsync(string userId, Guid identifierId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `SetEmailVerifiedAsync(string userId, Guid identifierId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `SetEmailUnverifiedAsync(string userId, Guid identifierId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `VerifyEmailAsync(string userId, Guid identifierId, VerifyEmailRequest verifyEmailRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<VerifyEmailResponse>>`
-
-Phones (identifier id is a `Guid`):
-
-- `AddPhoneAsync(string userId, AddPhoneRequest addPhoneRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `RemovePhoneAsync(string userId, Guid identifierId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `SetPrimaryPhoneAsync(string userId, Guid identifierId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `SetPhoneVerifiedAsync(string userId, Guid identifierId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `SetPhoneUnverifiedAsync(string userId, Guid identifierId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-
-Passkeys / passwords:
-
-- `RemovePasskeyAsync(string userId, string passkeyId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-- `SetPasswordAsync(string userId, SetPasswordRequest setPasswordRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `RemovePasswordAsync(string userId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-- `SetPasswordResetRequiredAsync(string userId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `RemovePasswordResetRequiredAsync(string userId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `ResetPasswordAsync(string userId, ResetPasswordRequest resetPasswordRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ResetPasswordResponse>>`
-- `ChangePasswordAsync(string userId, ChangePasswordRequest changePasswordRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-
-Claims / public / private data:
-
-- `PatchClaimsAsync(string userId, UpdateClaimsRequest updateClaimsRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-- `GetPrivateDataAsync(string userId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<UserPrivateData>>`
-- `PatchPrivateDataAsync(string userId, UpdatePrivateDataRequest updatePrivateDataRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<UserPrivateData>>`
-- `GetPublicDataAsync(string userId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<UserPublicData>>`
-- `PatchPublicDataAsync(string userId, UpdatePublicDataRequest updatePublicDataRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<UserPublicData>>`
-
-Blocked IPs:
-
-- `GetAllBlockedIpsAsync(string userId, int? page = 1, int? size = 10, string? filter = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<UserIpAccessDetails>, PageModel>>`
-- `UnblockIpAsync(string userId, UnblockIpRequest unblockIpRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>`
-
-Sessions **[Pro]**:
-
-- `GetAllUserSessionsAsync(string userId, int? page = 1, int? size = 10, string? clientId = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<UserSession>, PageModel>>` **[Pro]**
-- `FindUserSessionAsync(string userId, string sessionId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<UserSession>>` **[Pro]**
-- `RevokeUserSessionAsync(string userId, string sessionId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>` **[Pro]**
-
-External authenticator:
-
-- `ExternalAuthenticatorDisconnectAsync(string userId, ExternalAuthenticatorDisconnectRequest externalAuthenticatorDisconnectRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<User>>` — `req.Provider` (`string`) + `req.ProviderUserId` (`string`) identify the connection to remove.
-
-Group membership (queryable from both sides; `groupId` is a `Guid`):
-
-- `GetAllUserGroupsAsync(string userId, int? page = 1, int? size = 10, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<UserGroup>, PageModel>>`
-- `FindUserGroupAsync(string userId, Guid groupId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<UserGroup>>`
-- `AssignUserToGroupAsync(string userId, Guid groupId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<UserGroup>>`
-- `RemoveUserFromGroupAsync(string userId, Guid groupId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-- `GetAllGroupAssignedUsersAsync(Guid groupId, int? page = 1, int? size = 10, string? filter = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<UserSummary>, PageModel>>` — group-side view.
-
-Grants / consents / tokens / codes:
-
-- `GetAllUserClientGrantsAsync(string userId, int? page = 1, int? size = 10, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<UserClientGrants>, PageModel>>` **[Pro]**
-- `GetAllUserConsentsAsync(string userId, int? page = 1, int? size = 10, string? clientId = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<UserConsent>, PageModel>>` **[Secure+]**
-- `GetAllReferenceTokensAsync(string userId, int? page = 1, int? size = 10, string? clientId = default, string? sessionId = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<ReferenceToken>, PageModel>>` **[Secure+]**
-- `GetAllRefreshTokensAsync(string userId, int? page = 1, int? size = 10, string? clientId = default, string? sessionId = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<RefreshToken>, PageModel>>` **[Secure+]**
-- `GetAllAuthorizationCodesAsync(string userId, int? page = 1, int? size = 10, string? clientId = default, string? sessionId = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<AuthorizationCode>, PageModel>>` **[Secure+]**
-- `RevokeUserClientGrantsAsync(string userId, string clientId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>` **[Secure+]**
-- `RevokeUserConsentAsync(string userId, string consentId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>` **[Secure+]**
-- `RevokeReferenceTokenAsync(string userId, string tokenId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>` **[Secure+]**
-- `RevokeRefreshTokenAsync(string userId, string tokenId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>` **[Secure+]**
-- `RevokeAuthorizationCodeAsync(string userId, string codeId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>` **[Secure+]**
-
-## `client.Clients` — `ClientsClient`
-
-OAuth/OIDC applications. The accessor is `.Clients`, but the resource is the **`Application`** model — every method is named `*Application*` and there is no `Client` model. The path param is named `clientId` (a `string`).
-
-Applications:
-
-- `GetAllApplicationsAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<Application>, PageModel>>`
-- `CreateApplicationAsync(CreateApplicationRequest createApplicationRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<Application>>`
-- `FindApplicationByIdAsync(string clientId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<Application>>`
-- `PatchApplicationAsync(string clientId, PatchApplicationRequest patchApplicationRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<Application>>`
-- `DeleteApplicationAsync(string clientId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-> `PatchApplicationRequest` exposes ~40+ mutable `Optional<T>` fields (`Enabled`, `AppType`, `TechType`, `ClientName`, `RedirectUris`, token lifetimes, consent flags, …) but no `ClientId`. Some fields carry their own subscription gate at the property level — e.g. `EnableConsent` (**Secure+**), PAR/JAR, back-channel logout, reference tokens, and extended refresh-token lifetimes — documented in the model's XML `<note>` comments. See [Subscription tiers](#subscription-tiers).
-
-Application secrets:
-
-- `GetAllApplicationSecretsAsync(string clientId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<Secret>>>` (not paginated)
-- `CreateApplicationSecretAsync(string clientId, CreateSecretRequest createSecretRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<Secret>>`
-- `FindApplicationSecretByIdAsync(string clientId, string secretId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<Secret>>`
-- `DeleteApplicationSecretAsync(string clientId, string secretId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-Application ↔ group mapping (`groupId` is a `Guid`):
-
-- `GetAllApplicationGroupsAsync(string clientId, int? page = 1, int? size = 10, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<ApplicationGroup>, PageModel>>`
-- `FindApplicationGroupAsync(string clientId, Guid groupId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ApplicationGroup>>`
-- `AssignGroupToApplicationAsync(string clientId, Guid groupId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>` **[ScaleX]**
-- `RemoveGroupFromApplicationAsync(string clientId, Guid groupId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>` **[ScaleX]**
-- `GetAllGroupAssignedApplicationsAsync(Guid groupId, int? page = 1, int? size = 10, string? filter = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<Application>, PageModel>>` — group-side view.
-
-## `client.Groups` — `GroupsClient`
-
-Group CRUD. Membership assignment lives on `UsersClient` / `ClientsClient`, not here — there are no `AddGroupMember` / `RemoveGroupMember` methods. `groupId` is a `Guid`.
-
-- `GetAllGroupsAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<Group>, PageModel>>`
-- `CreateGroupAsync(CreateGroupRequest createGroupRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<Group>>` **[Pro — only when creating more than two groups]**
-- `FindGroupByIdAsync(Guid groupId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<Group>>`
-- `PatchGroupAsync(Guid groupId, PatchGroupRequest patchGroupRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<Group>>`
-- `DeleteGroupAsync(Guid groupId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-## `client.Resources` — `ResourcesClient`
-
-API resources (audiences) + secrets, API scopes, API access policies (basic/advanced), plus tenant-wide identity scopes and claim resources.
-
-> **Parameter-order gotchas:** `FindApiResourceSecretByIdAsync(secretId, apiId, …)` and the API-scope find/patch/delete methods take `(scopeId, apiId, …)` — the scope/secret id comes **before** `apiId` — whereas `DeleteApiResourceSecretAsync(apiId, secretId, …)` and the create methods take `apiId` first. Copy signatures verbatim.
-
-API resources:
-
-- `GetAllApiResourcesAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<ApiResource>, PageModel>>`
-- `CreateApiResourceAsync(CreateApiResourceRequest createApiResourceRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ApiResource>>`
-- `FindApiResourceByIdAsync(string apiId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ApiResource>>`
-- `PatchApiResourceAsync(string apiId, PatchApiResourceRequest patchApiResourceRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ApiResource>>`
-- `DeleteApiResourceAsync(string apiId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-API resource secrets:
-
-- `GetAllApiResourceSecretsAsync(string apiId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<Secret>>>` (not paginated)
-- `CreateApiResourceSecretAsync(string apiId, CreateSecretRequest createSecretRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<Secret>>` **[ScaleX]**
-- `FindApiResourceSecretByIdAsync(string secretId, string apiId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<Secret>>` — note order: `(secretId, apiId)`.
-- `DeleteApiResourceSecretAsync(string apiId, string secretId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>` — note order: `(apiId, secretId)`.
-
-API scopes (resource-scoped; find/patch/delete take `(scopeId, apiId)`):
-
-- `GetAllApiScopesAsync(string apiId, int? page = 1, int? size = 10, string? filter = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<ApiScope>, PageModel>>`
-- `CreateApiScopeAsync(string apiId, CreateApiScopeRequest createApiScopeRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ApiScope>>`
-- `FindApiScopeByIdAsync(string scopeId, string apiId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ApiScope>>`
-- `PatchApiScopeAsync(string scopeId, string apiId, PatchApiScopeRequest patchApiScopeRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ApiScope>>`
-- `DeleteApiScopeAsync(string scopeId, string apiId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-API access policies (per resource). Basic policies use structured conditions; advanced policies use the policy-expression DSL. `ConvertApiAccessBasicToAdvancedPolicyAsync` turns a basic policy into an advanced one (one-way):
-
-- `GetAllApiAccessPoliciesAsync(string apiId, int? page = 1, int? size = 10, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<ApiAccessPolicy>, PageModel>>` — returns the union; branch on `Type`.
-- `CreateApiAccessBasicPolicyAsync(string apiId, CreateApiAccessBasicPolicyRequest createApiAccessBasicPolicyRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<BasicApiAccessPolicy>>`
-- `FindApiAccessBasicPolicyByIdAsync(string apiId, string policyId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<BasicApiAccessPolicy>>`
-- `PatchApiAccessBasicPolicyAsync(string apiId, string policyId, PatchApiAccessBasicPolicyRequest patchApiAccessBasicPolicyRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<BasicApiAccessPolicy>>`
-- `DeleteApiAccessBasicPolicyAsync(string apiId, string policyId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-- `ConvertApiAccessBasicToAdvancedPolicyAsync(string apiId, string policyId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<AdvancedApiAccessPolicy>>`
-- `CreateApiAccessAdvancedPolicyAsync(string apiId, CreateApiAccessAdvancedPolicyRequest createApiAccessAdvancedPolicyRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<AdvancedApiAccessPolicy>>`
-- `FindApiAccessAdvancedPolicyByIdAsync(string apiId, string policyId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<AdvancedApiAccessPolicy>>`
-- `PatchApiAccessAdvancedPolicyAsync(string apiId, string policyId, PatchApiAccessAdvancedPolicyRequest patchApiAccessAdvancedPolicyRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<AdvancedApiAccessPolicy>>`
-- `DeleteApiAccessAdvancedPolicyAsync(string apiId, string policyId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-Identity scopes (tenant-wide):
-
-- `GetAllScopesAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<Scope>, PageModel>>`
-- `CreateScopeAsync(CreateScopeRequest createScopeRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<Scope>>`
-- `FindScopeByIdAsync(string scopeId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<Scope>>`
-- `PatchScopeAsync(string scopeId, PatchScopeRequest patchScopeRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<Scope>>`
-- `DeleteScopeAsync(string scopeId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-Claim resources:
-
-- `GetAllClaimResourcesAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<ClaimResource>, PageModel>>`
-- `CreateClaimResourceAsync(CreateClaimResourceRequest createClaimResourceRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ClaimResource>>`
-- `FindClaimResourceByIdAsync(string claimId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ClaimResource>>`
-- `PatchClaimResourceAsync(string claimId, PatchClaimResourceRequest patchClaimResourceRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ClaimResource>>`
-- `DeleteClaimResourceAsync(string claimId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-## `client.Keys` — `KeysClient`
-
-Signing key material: list, rotate, revoke. There is no `CreateKeyAsync` / `FindKeyByIdAsync`.
-
-- `GetAllKeyMaterialsAsync(int? page = 1, int? size = 10, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<KeyMaterial>, PageModel>>`
-- `RotateKeyAsync(string keyId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-- `RevokeKeyAsync(string keyId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-## `client.Logs` — `LogsClient`
-
-Audit/event logs. `logId` is a `Guid`.
-
-- `GetAllLogsAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<Log>, PageModel>>`
-- `FindLogByIdAsync(Guid logId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<Log>>`
-
-## `client.NetworkZones` — `NetworkZonesClient`
-
-IP-based and region-based network zones referenced by API access policies. The whole feature is **[ScaleX]**; the create/patch endpoints carry the source-level note explicitly. `GetAllNetworkZonesAsync` returns the polymorphic `INetworkZone` union — branch on `Type` (concrete `IpNetworkZone` / `RegionalNetworkZone`).
-
-- `GetAllNetworkZonesAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<INetworkZone>, PageModel>>`
-
-IP zones:
-
-- `CreateIpNetworkZoneAsync(CreateIpNetworkZoneRequest createIpNetworkZoneRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<IpNetworkZone>>` **[ScaleX]**
-- `FindIpNetworkZoneByIdAsync(string zoneId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<IpNetworkZone>>`
-- `PatchIpNetworkZoneAsync(string zoneId, PatchIpNetworkZoneRequest patchIpNetworkZoneRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<IpNetworkZone>>` **[ScaleX]**
-- `DeleteIpNetworkZoneAsync(string zoneId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-Regional zones:
-
-- `CreateRegionalNetworkZoneAsync(CreateRegionalNetworkZoneRequest createRegionalNetworkZoneRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<RegionalNetworkZone>>` **[ScaleX]**
-- `FindRegionalNetworkZoneByIdAsync(string zoneId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<RegionalNetworkZone>>`
-- `PatchRegionalNetworkZoneAsync(string zoneId, PatchRegionalNetworkZoneRequest patchRegionalNetworkZoneRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<RegionalNetworkZone>>` **[ScaleX]**
-- `DeleteRegionalNetworkZoneAsync(string zoneId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-`NetworkZoneCategory` and `NetworkZoneOperator` are enums on the request/response models — refer to IDE intellisense for valid values.
-
-## `client.Options` — `OptionsClient`
-
-Tenant-wide options: authentication options, communication (email/SMS provider) options, sign-up custom field CRUD, and external identity provider CRUD. Per-provider MFA *option shapes* (passkey/password/email/phone) ride on the option models rather than as discrete methods.
-
-- `FindAuthenticationOptionsAsync(CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<AuthenticationOptions>>`
-- `PatchAuthenticationOptionsAsync(PatchAuthenticationOptionsRequest patchAuthenticationOptionsRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<AuthenticationOptions>>`
-- `FindCommunicationOptionsAsync(CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<CommunicationOptions>>`
-- `PatchCommunicationOptionsAsync(PatchCommunicationOptionsRequest patchCommunicationOptionsRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<CommunicationOptions>>`
-
-Sign-up custom fields (keyed by `claimName`):
-
-- `GetAllSignUpCustomFieldsAsync(CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<SignUpCustomField>>>` (not paginated)
-- `CreateSignUpCustomFieldAsync(CreateSignUpCustomFieldRequest createSignUpCustomFieldRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<SignUpCustomField>>`
-- `FindSignUpCustomFieldAsync(string claimName, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<SignUpCustomField>>`
-- `PatchSignUpCustomFieldAsync(string claimName, PatchSignUpCustomFieldRequest patchSignUpCustomFieldRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<SignUpCustomField>>`
-- `DeleteSignUpCustomFieldAsync(string claimName, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-External identity providers (keyed by `providerName`; the list method keeps its `ExternalAuthenticators` name but now returns `ExternalProvider`):
-
-- `GetAllExternalAuthenticatorsAsync(CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<ExternalProvider>>>` (not paginated)
-- `CreateExternalProviderAsync(CreateExternalProviderRequest createExternalProviderRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ExternalProvider>>`
-- `FindExternalProviderAsync(string providerName, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ExternalProvider>>`
-- `PatchExternalProviderAsync(string providerName, PatchExternalProviderRequest patchExternalProviderRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ExternalProvider>>`
-- `DeleteExternalProviderAsync(string providerName, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-## `client.Branding` — `BrandingClient`
-
-Branding options for hosted pages, emails, and SMS. Three surfaces, each `Find* / Patch*`; there is no umbrella `GetBrandingAsync`.
-
-- `FindPageBrandingOptionsAsync(CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<PageBrandingOptions>>`
-- `PatchPageBrandingOptionsAsync(PatchPageBrandingOptionsRequest patchPageBrandingOptionsRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<PageBrandingOptions>>`
-- `FindEmailBrandingOptionsAsync(CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<EmailBrandingOptions>>`
-- `PatchEmailBrandingOptionsAsync(PatchEmailBrandingOptionsRequest patchEmailBrandingOptionsRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<EmailBrandingOptions>>`
-- `FindSmsBrandingOptionsAsync(CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<SmsBrandingOptions>>`
-- `PatchSmsBrandingOptionsAsync(PatchSmsBrandingOptionsRequest patchSmsBrandingOptionsRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<SmsBrandingOptions>>`
-
-## `client.TrustStores` — `TrustStoresClient`
-
-Two independent trust-store families — **PKI** (X.509 / mTLS) and **SPIFFE** — each with its own CRUD and default-selection surface, plus certificate revocations and a ban list on the PKI side and a banned-SVID list on the SPIFFE side.
-
-PKI trust stores:
-
-- `GetAllPkiTrustStoresAsync(int? page = 1, int? size = 10, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<PkiTrustStoreSummary>, PageModel>>`
-- `CreatePkiTrustStoreAsync(CreatePkiTrustStoreRequest createPkiTrustStoreRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<PkiTrustStore>>`
-- `FindPkiTrustStoreByIdAsync(string trustStoreId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<PkiTrustStore>>`
-- `PatchPkiTrustStoreAsync(string trustStoreId, PatchPkiTrustStoreRequest patchPkiTrustStoreRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<PkiTrustStore>>`
-- `DeletePkiTrustStoreAsync(string trustStoreId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-- `SetPkiTrustStoreDefaultAsync(string trustStoreId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<PkiTrustStore>>`
-
-Certificate revocations (PKI). `AddCertificateRevocationAsync` / `FindCertificateRevocationAsync` return the polymorphic `ICertificateRevocation` (`BaseCertificateRevocation` / `DeltaCertificateRevocation`); `RevocationGrouped` (+ `RevocationGroupedDelta`) is the paginated list shape:
-
-- `GetAllRevocationsAsync(string trustStoreId, int? page = 1, int? size = 10, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<RevocationGrouped>, PageModel>>`
-- `AddCertificateRevocationAsync(string trustStoreId, AddCertificateRevocationRequest addCertificateRevocationRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ICertificateRevocation>>`
-- `FindCertificateRevocationAsync(string trustStoreId, string revocationId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<ICertificateRevocation>>`
-- `RemoveCertificateRevocationAsync(string trustStoreId, string revocationId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-Banned certificates (PKI):
-
-- `GetAllPkiBannedCertificatesAsync(string trustStoreId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<BannedCertificate>>>` (not paginated)
-- `BanPkiTrustStoreCertificateAsync(string trustStoreId, BanTrustStoreCertificateRequest banTrustStoreCertificateRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<BannedCertificate>>`
-- `UnbanPkiTrustStoreCertificateAsync(string trustStoreId, string banId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-SPIFFE trust stores:
-
-- `GetAllSpiffeTrustStoresAsync(int? page = 1, int? size = 10, string? sort = default, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<SpiffeTrustStoreSummary>, PageModel>>`
-- `CreateSpiffeTrustStoreAsync(CreateSpiffeTrustStoreRequest createSpiffeTrustStoreRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<SpiffeTrustStore>>`
-- `FindSpiffeTrustStoreByIdAsync(string trustStoreId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<SpiffeTrustStore>>`
-- `PatchSpiffeTrustStoreAsync(string trustStoreId, PatchSpiffeTrustStoreRequest patchSpiffeTrustStoreRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<SpiffeTrustStore>>`
-- `DeleteSpiffeTrustStoreAsync(string trustStoreId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-- `SetSpiffeTrustStoreDefaultAsync(string trustStoreId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<SpiffeTrustStore>>`
-
-Banned SVIDs (SPIFFE):
-
-- `GetAllSpiffeBannedSvidsAsync(string trustStoreId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<List<BannedSvid>>>` (not paginated)
-- `BanSpiffeTrustStoreSvidAsync(string trustStoreId, BanTrustStoreSvidRequest banTrustStoreSvidRequest, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse<BannedSvid>>`
-- `UnbanSpiffeTrustStoreSvidAsync(string trustStoreId, string banId, CancellationToken cancellationToken = default)` → `Task<MonoCloudResponse>`
-
-Trust-store sources include S3 (added in 0.2.8). Key models: `PkiTrustStore` / `PkiTrustStoreSummary` / `PkiTrustStoreOptions`, `SpiffeTrustStore` / `SpiffeTrustStoreSummary` / `SpiffeTrustStoreOptions`, the `Create…` / `Patch…` `Pki` / `Spiffe` `TrustStore(Options)Request` types, `BannedCertificate`, `BannedSvid`, `BanTrustStoreCertificateRequest`, `BanTrustStoreSvidRequest`, `AddCertificateRevocationRequest`, `ICertificateRevocation` (+ `BaseCertificateRevocation` / `DeltaCertificateRevocation`), and `RevocationGrouped` (+ `RevocationGroupedDelta`).
-
----
-
-## Subscription tiers
-
-The server returns `MonoCloudForbiddenException` (403) — or `MonoCloudPaymentRequiredException` (402) — when the tenant's plan is insufficient. Gates are grounded in the `<note>` XML comments in `src/management/src/Clients/*.cs`. Methods not listed here carry no tier gate in source.
-
-| Tier | Gated methods |
+| Parameter | Value comes from |
 |---|---|
-| **Pro** | `Groups.CreateGroupAsync` (only when creating **more than two** groups); `Users.GetAllUserSessionsAsync`, `Users.FindUserSessionAsync`, `Users.RevokeUserSessionAsync`; `Users.GetAllUserClientGrantsAsync` |
-| **Secure+** | `Users.GetAllUserConsentsAsync`, `GetAllReferenceTokensAsync`, `GetAllRefreshTokensAsync`, `GetAllAuthorizationCodesAsync`; `Users.RevokeUserClientGrantsAsync`, `RevokeUserConsentAsync`, `RevokeReferenceTokenAsync`, `RevokeRefreshTokenAsync`, `RevokeAuthorizationCodeAsync` |
-| **ScaleX** | All `NetworkZones` create/patch endpoints (`CreateIpNetworkZoneAsync`, `PatchIpNetworkZoneAsync`, `CreateRegionalNetworkZoneAsync`, `PatchRegionalNetworkZoneAsync`); `Clients.AssignGroupToApplicationAsync`, `RemoveGroupFromApplicationAsync`; `Resources.CreateApiResourceSecretAsync` |
+| `userId` | `User.UserId` / `UserSummary.UserId` |
+| `clientId` | `Application.Id` |
+| `groupId` (`Guid`) | `Group.GroupId`, `UserGroup.GroupId`, `ApplicationGroup.GroupId` |
+| `identifierId` (`Guid`) | `UserEmail.Id` / `UserPhone.Id` (in `User.Emails` / `User.PhoneNumbers`) |
+| `logId` (`Guid`) | `Log.Id` |
+| `sessionId`, `passkeyId` | `UserSession.SessionId`, `UserPasskey.PasskeyId` |
+| `claimName`, `providerName` | `SignUpCustomField.ClaimName`, `ExternalProvider.Name` |
+| `apiId`, `scopeId`, `claimId`, `secretId`, `policyId`, `keyId`, `zoneId`, `trustStoreId`, `revocationId`, `banId`, `consentId`, `tokenId`, `codeId` | The `Id` property of the corresponding model |
 
-> **Field-level gates.** Some request *fields* require a higher tier even on otherwise-free endpoints — e.g. `EnableConsent` (Secure+, on `CreateApplicationRequest` / `PatchApplicationRequest`), PAR/JAR, back-channel logout, session binding, multi-audience tokens, reference tokens, and extended refresh-token lifetimes. These are documented in individual model-property XML `<note>` comments; treat those as the source of truth.
+## Methods
 
-## PATCH semantics
+Signatures are verbatim from source, minus the trailing `CancellationToken cancellationToken = default` that every method takes. **Returns** is the awaited type: a type `T` stands for `MonoCloudResponse<T>`, `(paged)` for `MonoCloudResponse<T, PageModel>`, and `—` for the bare `MonoCloudResponse` (no `Data`). **[Pro]**, **[Secure+]**, and **[ScaleX]** mark the subscription notes in source; unmarked methods carry none.
 
-Every `Patch…Request` property is `Optional<T>` (namespace `MonoCloud.Management.Core.Helpers`). Only properties you explicitly assign are serialized (a custom `PatchConverter` plus `JsonIgnoreCondition.WhenWritingNull` omit unset ones), so PATCH is a **true partial update** — unset fields are left unchanged, and `Optional<string?>` lets you distinguish "set to null" from "not provided".
+### `Users` — `UsersClient`
 
-Resource identifiers are **path-only** and never appear in a patch body, so they cannot be changed via PATCH: `clientId` (Application), `apiId` (ApiResource), `groupId` (Group), `zoneId` (NetworkZone), `trustStoreId`, `scopeId`, `claimId`, and `claimName` (sign-up custom field).
+- `CreateUserAsync` enforces the tenant's sign-up policies unless the request sets `SkipPasswordPolicyChecks`, `SkipIdentifierRestrictionChecks` (identifier blocklist), or `SkipConformanceChecks`.
+- `VerifyEmailAsync` emails the user a verification link; `SetEmailVerifiedAsync` marks the address verified directly.
+- `RevokeUserSessionAsync` ends the session but leaves issued tokens valid unless the application binds tokens to sessions.
+- `GetAllGroupAssignedUsersAsync(groupId, …)` is the group-side membership view.
 
-## Filter / sort / pagination
+| Method | Returns |
+|---|---|
+| `GetAllUsersAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default)` | `List<UserSummary>` (paged) |
+| `CreateUserAsync(CreateUserRequest createUserRequest)` | `User` |
+| `FindUserByIdAsync(string userId)` | `User` |
+| `DeleteUserAsync(string userId)` | — |
+| `EnableUserAsync(string userId)` | `User` |
+| `DisableUserAsync(string userId, DisableUserRequest disableUserRequest)` | `User` |
+| `UnblockUserAsync(string userId)` | `User` |
+| `UpdateUsernameAsync(string userId, UpdateUsernameRequest updateUsernameRequest)` | `User` |
+| `RemoveUsernameAsync(string userId)` | `User` |
+| `AddEmailAsync(string userId, AddEmailRequest addEmailRequest)` | `User` |
+| `RemoveEmailAsync(string userId, Guid identifierId)` | `User` |
+| `SetPrimaryEmailAsync(string userId, Guid identifierId)` | `User` |
+| `SetEmailVerifiedAsync(string userId, Guid identifierId)` | `User` |
+| `SetEmailUnverifiedAsync(string userId, Guid identifierId)` | `User` |
+| `VerifyEmailAsync(string userId, Guid identifierId, VerifyEmailRequest verifyEmailRequest)` | `VerifyEmailResponse` |
+| `AddPhoneAsync(string userId, AddPhoneRequest addPhoneRequest)` | `User` |
+| `RemovePhoneAsync(string userId, Guid identifierId)` | `User` |
+| `SetPrimaryPhoneAsync(string userId, Guid identifierId)` | `User` |
+| `SetPhoneVerifiedAsync(string userId, Guid identifierId)` | `User` |
+| `SetPhoneUnverifiedAsync(string userId, Guid identifierId)` | `User` |
+| `RemovePasskeyAsync(string userId, string passkeyId)` | — |
+| `SetPasswordAsync(string userId, SetPasswordRequest setPasswordRequest)` | `User` |
+| `RemovePasswordAsync(string userId)` | — |
+| `SetPasswordResetRequiredAsync(string userId)` | `User` |
+| `RemovePasswordResetRequiredAsync(string userId)` | `User` |
+| `ResetPasswordAsync(string userId, ResetPasswordRequest resetPasswordRequest)` | `ResetPasswordResponse` |
+| `ChangePasswordAsync(string userId, ChangePasswordRequest changePasswordRequest)` | `User` |
+| `PatchClaimsAsync(string userId, UpdateClaimsRequest updateClaimsRequest)` | `User` |
+| `GetPrivateDataAsync(string userId)` | `UserPrivateData` |
+| `PatchPrivateDataAsync(string userId, UpdatePrivateDataRequest updatePrivateDataRequest)` | `UserPrivateData` |
+| `GetPublicDataAsync(string userId)` | `UserPublicData` |
+| `PatchPublicDataAsync(string userId, UpdatePublicDataRequest updatePublicDataRequest)` | `UserPublicData` |
+| `GetAllBlockedIpsAsync(string userId, int? page = 1, int? size = 10, string? filter = default, string? sort = default)` | `List<UserIpAccessDetails>` (paged) |
+| `UnblockIpAsync(string userId, UnblockIpRequest unblockIpRequest)` | `User` |
+| `GetAllUserSessionsAsync(string userId, int? page = 1, int? size = 10, string? clientId = default, string? sort = default)` **[Pro]** | `List<UserSession>` (paged) |
+| `FindUserSessionAsync(string userId, string sessionId)` **[Pro]** | `UserSession` |
+| `RevokeUserSessionAsync(string userId, string sessionId)` **[Pro]** | — |
+| `ExternalAuthenticatorDisconnectAsync(string userId, ExternalAuthenticatorDisconnectRequest externalAuthenticatorDisconnectRequest)` | `User` |
+| `GetAllUserGroupsAsync(string userId, int? page = 1, int? size = 10, string? sort = default)` | `List<UserGroup>` (paged) |
+| `FindUserGroupAsync(string userId, Guid groupId)` | `UserGroup` |
+| `AssignUserToGroupAsync(string userId, Guid groupId)` | `UserGroup` |
+| `RemoveUserFromGroupAsync(string userId, Guid groupId)` | — |
+| `GetAllGroupAssignedUsersAsync(Guid groupId, int? page = 1, int? size = 10, string? filter = default, string? sort = default)` | `List<UserSummary>` (paged) |
+| `GetAllUserClientGrantsAsync(string userId, int? page = 1, int? size = 10)` **[Pro]** | `List<UserClientGrants>` (paged) |
+| `GetAllUserConsentsAsync(string userId, int? page = 1, int? size = 10, string? clientId = default, string? sort = default)` **[Secure+]** | `List<UserConsent>` (paged) |
+| `GetAllReferenceTokensAsync(string userId, int? page = 1, int? size = 10, string? clientId = default, string? sessionId = default, string? sort = default)` **[Secure+]** | `List<ReferenceToken>` (paged) |
+| `GetAllRefreshTokensAsync(string userId, int? page = 1, int? size = 10, string? clientId = default, string? sessionId = default, string? sort = default)` **[Secure+]** | `List<RefreshToken>` (paged) |
+| `GetAllAuthorizationCodesAsync(string userId, int? page = 1, int? size = 10, string? clientId = default, string? sessionId = default, string? sort = default)` **[Secure+]** | `List<AuthorizationCode>` (paged) |
+| `RevokeUserClientGrantsAsync(string userId, string clientId)` **[Secure+]** | — |
+| `RevokeUserConsentAsync(string userId, string consentId)` **[Secure+]** | — |
+| `RevokeReferenceTokenAsync(string userId, string tokenId)` **[Secure+]** | — |
+| `RevokeRefreshTokenAsync(string userId, string tokenId)` **[Secure+]** | — |
+| `RevokeAuthorizationCodeAsync(string userId, string codeId)` **[Secure+]** | — |
 
-- Pagination params are `int? page = 1` (1-indexed) and `int? size = 10`. `PageData` (pagination metadata) arrives in the `x-pagination` response header, not the body.
-- `filter` (where present) is a server-side query string; `sort` is a server-side sort expression. Both are `string?` defaulting to `null`. Some list endpoints scope the query further via a typed param instead of `filter` — e.g. `clientId` / `sessionId` on the session/grant/token lists.
-- **Non-paginated lists** (no `PageData`) return `MonoCloudResponse<List<T>>`: `GetAllApplicationSecretsAsync`, `GetAllApiResourceSecretsAsync`, `GetAllSignUpCustomFieldsAsync`, `GetAllPkiBannedCertificatesAsync`, `GetAllSpiffeBannedSvidsAsync`. Everything else with a `GetAll…` name is paginated.
+### `Clients` — `ClientsClient`
 
-## GUID vs string ids
+Applications use the `Application` model (there is no `Client` model); `clientId` is `Application.Id`. `GetAllGroupAssignedApplicationsAsync(groupId, …)` is the group-side view.
 
-Group ids and user-identifier ids are `Guid` (`groupId`, `identifierId`, `logId`). User / application / resource / zone / trust-store / session ids are `string`.
+| Method | Returns |
+|---|---|
+| `GetAllApplicationsAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default)` | `List<Application>` (paged) |
+| `CreateApplicationAsync(CreateApplicationRequest createApplicationRequest)` | `Application` |
+| `FindApplicationByIdAsync(string clientId)` | `Application` |
+| `PatchApplicationAsync(string clientId, PatchApplicationRequest patchApplicationRequest)` | `Application` |
+| `DeleteApplicationAsync(string clientId)` | — |
+| `GetAllApplicationSecretsAsync(string clientId)` | `List<Secret>` |
+| `CreateApplicationSecretAsync(string clientId, CreateSecretRequest createSecretRequest)` | `Secret` |
+| `FindApplicationSecretByIdAsync(string clientId, string secretId)` | `Secret` |
+| `DeleteApplicationSecretAsync(string clientId, string secretId)` | — |
+| `GetAllApplicationGroupsAsync(string clientId, int? page = 1, int? size = 10, string? sort = default)` | `List<ApplicationGroup>` (paged) |
+| `FindApplicationGroupAsync(string clientId, Guid groupId)` | `ApplicationGroup` |
+| `AssignGroupToApplicationAsync(string clientId, Guid groupId)` **[ScaleX]** | — |
+| `RemoveGroupFromApplicationAsync(string clientId, Guid groupId)` **[ScaleX]** | — |
+| `GetAllGroupAssignedApplicationsAsync(Guid groupId, int? page = 1, int? size = 10, string? filter = default, string? sort = default)` | `List<Application>` (paged) |
 
-## Defaults
+### `Groups` — `GroupsClient`
 
-- `Timeout`: `TimeSpan.FromSeconds(10)` when `MonoCloudConfig` is built without an explicit value — raise it (via `Timeout` config/option) for long-running admin calls.
-- Pagination is 1-indexed; the server picks its own default `size` per endpoint (typically 10).
-- JSON conventions: snake_case property naming (`SnakeCaseNamingPolicy`), enums serialized snake_case via `JsonStringEnumConverter`, and epoch/unix-seconds datetimes via `EpochDateTimeConverter`.
+CRUD only. Membership is managed from `Users` (`AssignUserToGroupAsync`, …) and `Clients` (`AssignGroupToApplicationAsync`, …).
 
-## Environment variables / configuration
+| Method | Returns |
+|---|---|
+| `GetAllGroupsAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default)` | `List<Group>` (paged) |
+| `CreateGroupAsync(CreateGroupRequest createGroupRequest)` **[Pro: >2 groups]** | `Group` |
+| `FindGroupByIdAsync(Guid groupId)` | `Group` |
+| `PatchGroupAsync(Guid groupId, PatchGroupRequest patchGroupRequest)` | `Group` |
+| `DeleteGroupAsync(Guid groupId)` | — |
 
-**The .NET SDK (v0.2.11) reads no environment variables.** There is no `MONOCLOUD_MANAGEMENT_*` fallback anywhere in source (unlike the JS SDK). Config comes only from the `MonoCloud:Management` config section, a `MonoCloudManagementOptions` action, or a directly-constructed `MonoCloudConfig`.
+### `Resources` — `ResourcesClient`
 
-| Source | Key / property | Required? | Purpose |
-|---|---|---|---|
-| `IConfiguration` | `MonoCloud:Management:Domain` | yes | Tenant URL (no `/api`; `https://` prepended if missing) |
-| `IConfiguration` | `MonoCloud:Management:ApiKey` | yes | Management API key (sent as `X-API-KEY`) |
-| `IConfiguration` | `MonoCloud:Management:Timeout` | no | Integer **seconds**, parsed via `int.TryParse`; falls back to the 10s default |
-| Options action | `MonoCloudManagementOptions.Domain` | yes* | Overrides the config value when set |
-| Options action | `MonoCloudManagementOptions.ApiKey` | yes* | Overrides the config value when set |
-| Options action | `MonoCloudManagementOptions.Timeout` | no | A `TimeSpan`; overrides the config value when set |
+- Argument order: `FindApiResourceSecretByIdAsync` and the API-scope find/patch/delete methods take the child id before `apiId`; every other method takes `apiId` first.
+- Basic access policies are structured: one `ClientId`, the `Scopes` it may request (empty means all), and `Actions` (`ApiAccessPolicyActions`). Advanced policies hold Cedar source in `Cedar`, plus `Actions` and an optional denial message `Error`. `IsPermitted` on a returned policy says whether it grants access when matched.
+- `GetAllApiAccessPoliciesAsync` returns `ApiAccessPolicy` summaries; use `Type` (`PolicyTypes.Basic` / `Advanced`) to choose `FindApiAccessBasicPolicyByIdAsync` or `FindApiAccessAdvancedPolicyByIdAsync`.
+- `ConvertApiAccessBasicToAdvancedPolicyAsync` is irreversible: the policy keeps its id, gets generated Cedar source, and loses its basic-only fields (client, scopes).
+- `PatchClaimResourceAsync` applies to custom claims only; built-in claims can't be modified.
 
-\* Either the config section or the options action must supply `Domain` and `ApiKey`; DI throws `ArgumentNullException` at startup if both leave them empty. You can still feed these from environment variables through standard .NET `IConfiguration` providers (e.g. the environment-variables provider maps `MonoCloud__Management__Domain` → `MonoCloud:Management:Domain`) — that is a .NET configuration feature, not an SDK env fallback.
+| Method | Returns |
+|---|---|
+| `GetAllApiResourcesAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default)` | `List<ApiResource>` (paged) |
+| `CreateApiResourceAsync(CreateApiResourceRequest createApiResourceRequest)` | `ApiResource` |
+| `FindApiResourceByIdAsync(string apiId)` | `ApiResource` |
+| `PatchApiResourceAsync(string apiId, PatchApiResourceRequest patchApiResourceRequest)` | `ApiResource` |
+| `DeleteApiResourceAsync(string apiId)` | — |
+| `GetAllApiResourceSecretsAsync(string apiId)` | `List<Secret>` |
+| `CreateApiResourceSecretAsync(string apiId, CreateSecretRequest createSecretRequest)` **[ScaleX]** | `Secret` |
+| `FindApiResourceSecretByIdAsync(string secretId, string apiId)` | `Secret` |
+| `DeleteApiResourceSecretAsync(string apiId, string secretId)` | — |
+| `GetAllApiScopesAsync(string apiId, int? page = 1, int? size = 10, string? filter = default, string? sort = default)` | `List<ApiScope>` (paged) |
+| `CreateApiScopeAsync(string apiId, CreateApiScopeRequest createApiScopeRequest)` | `ApiScope` |
+| `FindApiScopeByIdAsync(string scopeId, string apiId)` | `ApiScope` |
+| `PatchApiScopeAsync(string scopeId, string apiId, PatchApiScopeRequest patchApiScopeRequest)` | `ApiScope` |
+| `DeleteApiScopeAsync(string scopeId, string apiId)` | — |
+| `GetAllApiAccessPoliciesAsync(string apiId, int? page = 1, int? size = 10, string? sort = default)` | `List<ApiAccessPolicy>` (paged) |
+| `CreateApiAccessBasicPolicyAsync(string apiId, CreateApiAccessBasicPolicyRequest createApiAccessBasicPolicyRequest)` | `BasicApiAccessPolicy` |
+| `FindApiAccessBasicPolicyByIdAsync(string apiId, string policyId)` | `BasicApiAccessPolicy` |
+| `PatchApiAccessBasicPolicyAsync(string apiId, string policyId, PatchApiAccessBasicPolicyRequest patchApiAccessBasicPolicyRequest)` | `BasicApiAccessPolicy` |
+| `DeleteApiAccessBasicPolicyAsync(string apiId, string policyId)` | — |
+| `ConvertApiAccessBasicToAdvancedPolicyAsync(string apiId, string policyId)` | `AdvancedApiAccessPolicy` |
+| `CreateApiAccessAdvancedPolicyAsync(string apiId, CreateApiAccessAdvancedPolicyRequest createApiAccessAdvancedPolicyRequest)` | `AdvancedApiAccessPolicy` |
+| `FindApiAccessAdvancedPolicyByIdAsync(string apiId, string policyId)` | `AdvancedApiAccessPolicy` |
+| `PatchApiAccessAdvancedPolicyAsync(string apiId, string policyId, PatchApiAccessAdvancedPolicyRequest patchApiAccessAdvancedPolicyRequest)` | `AdvancedApiAccessPolicy` |
+| `DeleteApiAccessAdvancedPolicyAsync(string apiId, string policyId)` | — |
+| `GetAllScopesAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default)` | `List<Scope>` (paged) |
+| `CreateScopeAsync(CreateScopeRequest createScopeRequest)` | `Scope` |
+| `FindScopeByIdAsync(string scopeId)` | `Scope` |
+| `PatchScopeAsync(string scopeId, PatchScopeRequest patchScopeRequest)` | `Scope` |
+| `DeleteScopeAsync(string scopeId)` | — |
+| `GetAllClaimResourcesAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default)` | `List<ClaimResource>` (paged) |
+| `CreateClaimResourceAsync(CreateClaimResourceRequest createClaimResourceRequest)` | `ClaimResource` |
+| `FindClaimResourceByIdAsync(string claimId)` | `ClaimResource` |
+| `PatchClaimResourceAsync(string claimId, PatchClaimResourceRequest patchClaimResourceRequest)` | `ClaimResource` |
+| `DeleteClaimResourceAsync(string claimId)` | — |
+
+### `Keys` — `KeysClient`
+
+There is no create or find method. `RotateKeyAsync` promotes a new signing key and keeps the previous one for validating issued tokens; `RevokeKeyAsync` makes the key untrusted immediately. Both are irreversible.
+
+| Method | Returns |
+|---|---|
+| `GetAllKeyMaterialsAsync(int? page = 1, int? size = 10)` | `List<KeyMaterial>` (paged) |
+| `RotateKeyAsync(string keyId)` | — |
+| `RevokeKeyAsync(string keyId)` | — |
+
+### `Logs` — `LogsClient`
+
+Sortable fields: `time_stamp`, `category`, `code`, `type`, `name` (e.g. `sort: "time_stamp:-1"`).
+
+| Method | Returns |
+|---|---|
+| `GetAllLogsAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default)` | `List<Log>` (paged) |
+| `FindLogByIdAsync(Guid logId)` | `Log` |
+
+### `NetworkZones` — `NetworkZonesClient`
+
+`GetAllNetworkZonesAsync` returns `INetworkZone` items deserialized as `IpNetworkZone` (`IpRanges`) or `RegionalNetworkZone` (`Countries`) by the `type` discriminator (`"ip"` / `"regional"`) — use type patterns (`zone is IpNetworkZone ip`). Enums: `NetworkZoneCategory` (`Trusted`, `Blocked`) and `NetworkZoneOperator` (`In`, `NotIn`). Source `<note>`s mark only create/patch as ScaleX, but the SDK maintainers' notes describe all network-zone endpoints as ScaleX.
+
+| Method | Returns |
+|---|---|
+| `GetAllNetworkZonesAsync(int? page = 1, int? size = 10, string? filter = default, string? sort = default)` | `List<INetworkZone>` (paged) |
+| `CreateIpNetworkZoneAsync(CreateIpNetworkZoneRequest createIpNetworkZoneRequest)` **[ScaleX]** | `IpNetworkZone` |
+| `FindIpNetworkZoneByIdAsync(string zoneId)` | `IpNetworkZone` |
+| `PatchIpNetworkZoneAsync(string zoneId, PatchIpNetworkZoneRequest patchIpNetworkZoneRequest)` **[ScaleX]** | `IpNetworkZone` |
+| `DeleteIpNetworkZoneAsync(string zoneId)` | — |
+| `CreateRegionalNetworkZoneAsync(CreateRegionalNetworkZoneRequest createRegionalNetworkZoneRequest)` **[ScaleX]** | `RegionalNetworkZone` |
+| `FindRegionalNetworkZoneByIdAsync(string zoneId)` | `RegionalNetworkZone` |
+| `PatchRegionalNetworkZoneAsync(string zoneId, PatchRegionalNetworkZoneRequest patchRegionalNetworkZoneRequest)` **[ScaleX]** | `RegionalNetworkZone` |
+| `DeleteRegionalNetworkZoneAsync(string zoneId)` | — |
+
+### `Options` — `OptionsClient`
+
+- `AuthenticationOptions` groups `PushedAuthorization`, `AccountProtection`, `Authenticators` (password, passkey, email, phone), `Identifiers`, `RecoveryMethods`, `Session`, `Logout`, and `SignUp`; `CommunicationOptions` groups `Email` and `Sms`. Patch them through the nested `Patch*Request` objects of `PatchAuthenticationOptionsRequest` / `PatchCommunicationOptionsRequest`.
+- External identity providers are keyed by `providerName` (`ExternalProvider.Name`); the list method is `GetAllExternalAuthenticatorsAsync`, and it returns `List<ExternalProvider>`. Provider kinds are the `ExternalAuthenticators` enum.
+
+| Method | Returns |
+|---|---|
+| `FindAuthenticationOptionsAsync()` | `AuthenticationOptions` |
+| `PatchAuthenticationOptionsAsync(PatchAuthenticationOptionsRequest patchAuthenticationOptionsRequest)` | `AuthenticationOptions` |
+| `FindCommunicationOptionsAsync()` | `CommunicationOptions` |
+| `PatchCommunicationOptionsAsync(PatchCommunicationOptionsRequest patchCommunicationOptionsRequest)` | `CommunicationOptions` |
+| `GetAllSignUpCustomFieldsAsync()` | `List<SignUpCustomField>` |
+| `CreateSignUpCustomFieldAsync(CreateSignUpCustomFieldRequest createSignUpCustomFieldRequest)` | `SignUpCustomField` |
+| `FindSignUpCustomFieldAsync(string claimName)` | `SignUpCustomField` |
+| `PatchSignUpCustomFieldAsync(string claimName, PatchSignUpCustomFieldRequest patchSignUpCustomFieldRequest)` | `SignUpCustomField` |
+| `DeleteSignUpCustomFieldAsync(string claimName)` | — |
+| `GetAllExternalAuthenticatorsAsync()` | `List<ExternalProvider>` |
+| `CreateExternalProviderAsync(CreateExternalProviderRequest createExternalProviderRequest)` | `ExternalProvider` |
+| `FindExternalProviderAsync(string providerName)` | `ExternalProvider` |
+| `PatchExternalProviderAsync(string providerName, PatchExternalProviderRequest patchExternalProviderRequest)` | `ExternalProvider` |
+| `DeleteExternalProviderAsync(string providerName)` | — |
+
+### `Branding` — `BrandingClient`
+
+Page, email, and SMS branding each have one `Find…` and one `Patch…` method.
+
+| Method | Returns |
+|---|---|
+| `FindPageBrandingOptionsAsync()` | `PageBrandingOptions` |
+| `PatchPageBrandingOptionsAsync(PatchPageBrandingOptionsRequest patchPageBrandingOptionsRequest)` | `PageBrandingOptions` |
+| `FindEmailBrandingOptionsAsync()` | `EmailBrandingOptions` |
+| `PatchEmailBrandingOptionsAsync(PatchEmailBrandingOptionsRequest patchEmailBrandingOptionsRequest)` | `EmailBrandingOptions` |
+| `FindSmsBrandingOptionsAsync()` | `SmsBrandingOptions` |
+| `PatchSmsBrandingOptionsAsync(PatchSmsBrandingOptionsRequest patchSmsBrandingOptionsRequest)` | `SmsBrandingOptions` |
+
+### `TrustStores` — `TrustStoresClient`
+
+- PKI (mTLS) stores are created from a PEM `CertChain`; SPIFFE stores from a `SpiffeBundleEndpoint` URL.
+- `Set…TrustStoreDefaultAsync` sets the store used when an mTLS endpoint doesn't select one.
+- PKI revocations are CRLs in PEM (`AddCertificateRevocationRequest.Value`). `ICertificateRevocation` is deserialized as `BaseCertificateRevocation` or `DeltaCertificateRevocation` by `type` (`"base"` / `"delta"`); the list returns `RevocationGrouped` items with their `Deltas`.
+- PKI bans identify a certificate by `BannedCertificateType` (`Thumbprint`, `SerialNumber`, `Subject`) and `Value`; SPIFFE bans take an SVID `Value`.
+
+| Method | Returns |
+|---|---|
+| `GetAllPkiTrustStoresAsync(int? page = 1, int? size = 10, string? sort = default)` | `List<PkiTrustStoreSummary>` (paged) |
+| `CreatePkiTrustStoreAsync(CreatePkiTrustStoreRequest createPkiTrustStoreRequest)` | `PkiTrustStore` |
+| `FindPkiTrustStoreByIdAsync(string trustStoreId)` | `PkiTrustStore` |
+| `PatchPkiTrustStoreAsync(string trustStoreId, PatchPkiTrustStoreRequest patchPkiTrustStoreRequest)` | `PkiTrustStore` |
+| `DeletePkiTrustStoreAsync(string trustStoreId)` | — |
+| `SetPkiTrustStoreDefaultAsync(string trustStoreId)` | `PkiTrustStore` |
+| `GetAllRevocationsAsync(string trustStoreId, int? page = 1, int? size = 10, string? sort = default)` | `List<RevocationGrouped>` (paged) |
+| `AddCertificateRevocationAsync(string trustStoreId, AddCertificateRevocationRequest addCertificateRevocationRequest)` | `ICertificateRevocation` |
+| `FindCertificateRevocationAsync(string trustStoreId, string revocationId)` | `ICertificateRevocation` |
+| `RemoveCertificateRevocationAsync(string trustStoreId, string revocationId)` | — |
+| `GetAllPkiBannedCertificatesAsync(string trustStoreId)` | `List<BannedCertificate>` |
+| `BanPkiTrustStoreCertificateAsync(string trustStoreId, BanTrustStoreCertificateRequest banTrustStoreCertificateRequest)` | `BannedCertificate` |
+| `UnbanPkiTrustStoreCertificateAsync(string trustStoreId, string banId)` | — |
+| `GetAllSpiffeTrustStoresAsync(int? page = 1, int? size = 10, string? sort = default)` | `List<SpiffeTrustStoreSummary>` (paged) |
+| `CreateSpiffeTrustStoreAsync(CreateSpiffeTrustStoreRequest createSpiffeTrustStoreRequest)` | `SpiffeTrustStore` |
+| `FindSpiffeTrustStoreByIdAsync(string trustStoreId)` | `SpiffeTrustStore` |
+| `PatchSpiffeTrustStoreAsync(string trustStoreId, PatchSpiffeTrustStoreRequest patchSpiffeTrustStoreRequest)` | `SpiffeTrustStore` |
+| `DeleteSpiffeTrustStoreAsync(string trustStoreId)` | — |
+| `SetSpiffeTrustStoreDefaultAsync(string trustStoreId)` | `SpiffeTrustStore` |
+| `GetAllSpiffeBannedSvidsAsync(string trustStoreId)` | `List<BannedSvid>` |
+| `BanSpiffeTrustStoreSvidAsync(string trustStoreId, BanTrustStoreSvidRequest banTrustStoreSvidRequest)` | `BannedSvid` |
+| `UnbanSpiffeTrustStoreSvidAsync(string trustStoreId, string banId)` | — |
+
+## Field-level subscription gates
+
+Request fields gated by model `<note>` comments (method-level gates are marked in the tables above):
+
+| Tier | Request fields |
+|---|---|
+| Pro | Applications: `FrontChannelLogoutUri`, `FrontChannelLogoutSessionRequired`, `AuthenticatorRestrictions`. Options: custom `Expiry` / `CodeLength` for email/phone authenticators, identifier verification, and recovery methods; password `Strength` / `Reuse`; sign-up `ShowTermsAndPrivacyPolicy`, `RequireExplicitUserAgreement`, `TermsUrl`, `PrivacyUrl`; sign-up restrictions (`Enabled`, `Identifiers`). Branding: custom SMS `Template` |
+| Secure+ | Applications: consent (`EnableConsent`, `RequireConsent`, `AlwaysRequireConsentForOfflineAccess`, `RememberConsent`, `ShowConsentScopeSelection`, `ConsentLifetime`), JAR (`RequireRequestObject`), PAR (`RequirePushedAuthorizationRequests`, `AllowAnyPushedAuthorizationRedirectUri`), `BackChannelLogoutUri`, `BackChannelLogoutSessionRequired`. Tenant PAR options: `EnablePushedAuthorizationRequests`, `RequirePushedAuthorizationRequests` |
+| ScaleX | Session binding (`BindRefreshTokensToSession`, `BindTokensToSession`), `AllowMultiAudience`, `AllowUserInfoAccess`, reference tokens (`AccessTokenType`), `AbsoluteRefreshTokenLifetime` longer than a month, `CreateApiResourceRequest.AutoGenerateSecret` |

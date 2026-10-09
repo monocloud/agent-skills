@@ -1,318 +1,198 @@
 # Troubleshooting — `@monocloud/auth-web-js`
 
-Quick reference for the most common things that go wrong when integrating MonoCloud authentication into a browser SPA. Each entry is **symptom → root cause → fix**.
+Symptom → cause → fix. Error strings are quoted exactly as the SDK throws them.
 
-## Sign-in callback never completes (URL stays on `/callback`)
+## Back from MonoCloud, but still signed out
 
-**Symptom:** After signing in, the browser lands on `/callback` (or whatever `callbackPath` you configured), shows whatever your app renders there, but `getSession()` still returns `undefined` and the URL stays at `…/callback?code=…&state=…`.
+**Symptom:** after the redirect the URL shows `?code=…&state=…` (or `getSession()` returns `undefined`) and nothing happens.
 
-**Cause:** `processCallback()` was never called at app startup, or was gated behind a route guard that skipped it on the callback path.
+**Causes:**
 
-**Fix:** Call `processCallback()` unconditionally during bootstrap, **before** rendering the UI:
+- `processCallback()` isn't called on that page load, or only on some routes.
+- The flow started on another origin than it returned to (`appUrl` vs the page's real origin — `localhost` vs `127.0.0.1`, a proxy). The pending state lives in the starting origin's `sessionStorage`.
+- The flow returned in a different tab than it started in (pending state is per tab).
+
+**Fix:** call `await client.processCallback()` unconditionally at startup, before rendering; set `appUrl` to the origin users actually load.
+
+## MonoCloud rejects the redirect / callback URL
+
+**Cause:** the registered **Callback URLs** / **Sign-out URLs** entry differs from what the SDK sends: `appUrl + callbackPath` (or `signOutPath`) with a trailing `/` removed — the defaults give the bare origin, e.g. `http://localhost:5173`. Typical slips: `http` vs `https`, missing port, different path.
+
+**Fix:** register the exact strings, plus the origin under **Cross-Origin URLs**:
+
+```
+Callback URLs:     http://localhost:5173/callback   (callbackPath: '/callback')
+Sign-out URLs:     http://localhost:5173            (default signOutPath)
+Cross-Origin URLs: http://localhost:5173
+```
+
+## `signIn()` rejects with `MonoCloudHttpError` before any redirect
+
+**Cause:** the discovery request (`<tenantDomain>/.well-known/openid-configuration`) failed. No `status` and a browser message such as `Failed to fetch` → the app origin isn't in **Cross-Origin URLs**, or `tenantDomain` is wrong/unreachable. `Error while fetching metadata. Unexpected status code: 404` → wrong `tenantDomain`.
+
+**Fix:** use the tenant URL from the dashboard and add the app origin to Cross-Origin URLs.
+
+## `MonoCloudValidationError: Sign in callback states mismatch`
+
+Also `Sign out states mismatch`.
+
+**Cause:** the callback path loaded while another attempt's state was pending — typically the user left the MonoCloud page with Back and landed on a `callbackPath` of `/` (no `code` / `state` in the URL), or an older callback URL was reopened during a newer sign-in. That call consumes the pending state, so the next load is clean.
+
+**Fix:** catch errors from `processCallback()` and continue rendering signed-out; prefer a dedicated `callbackPath` such as `/callback` so ordinary page loads never match it.
+
+## `MonoCloudJsError: Could not open popup`
+
+**Cause:** the popup wasn't opened from a user gesture — `signIn({ mode: 'popup' })` ran after another `await`, in a timer, or on load.
+
+**Fix:** call it first thing in the click handler (the SDK opens the window synchronously); otherwise use redirect mode.
 
 ```ts
-async function init() {
-  await client.processCallback();        // no-op when URL isn't a callback
-  // mount your app
-}
-```
-
-Don't dispatch on the path yourself — the SDK matches the URL against `appUrl + callbackPath` / `appUrl + signOutPath` internally. There is no need for a dedicated callback page or route component.
-
-## Callback URL not allowed (popup shows MonoCloud error page)
-
-**Symptom:** Sign-in redirects (or the popup) to MonoCloud, then MonoCloud renders an error page mentioning the redirect URI or "callback URL not allowed."
-
-**Cause:** The full URL formed from `appUrl + callbackPath` does not appear in the client's **Allowed Callback URLs** in the MonoCloud dashboard. Common slip-ups: `http` vs `https`, missing port (e.g. `:5173`), or a path mismatch.
-
-**Fix:** In the dashboard, open the SPA client and add the exact URL. Same for `signOutPath` under **Allowed Sign-out URLs**, and for the `appUrl` origin under **Allowed Origins (CORS)**.
-
-```
-Allowed Callback URLs:  http://localhost:5173/callback
-Allowed Sign-out URLs:  http://localhost:5173/logout
-Allowed Origins (CORS): http://localhost:5173
-```
-
-If you change `appUrl` or the paths in code, mirror the change in the dashboard.
-
-> **Trailing slashes are forgiving.** Since 0.1.1 the SDK trims trailing slashes both when constructing redirect URIs and when matching the current URL inside `processCallback()`. Registering `http://localhost:5173/callback/` (with slash) and using `callbackPath: '/callback'` (without) will still match. Likewise `appUrl: 'http://localhost:5173/'` is normalized to `http://localhost:5173`.
-
-## Popup blocked
-
-**Symptom:** `client.signIn({ mode: 'popup' })` throws `MonoCloudJsError: Could not open popup`. Or no error, but no window appears.
-
-**Cause:** Browsers block popups that aren't opened from a direct **user gesture** (click, key press). If the call is awaited inside an async chain that started elsewhere — e.g. inside `useEffect` or after a non-user-triggered timer — the gesture is "lost."
-
-**Fix:** Call `signIn({ mode: 'popup' })` directly in the click handler, not inside a deferred await:
-
-```ts
-// good — popup opens during the click event
 button.addEventListener('click', () => {
-  client.signIn({ mode: 'popup' }).catch(console.error);
-});
-
-// bad — async work before the popup loses the user gesture
-button.addEventListener('click', async () => {
-  await fetch('/api/something');         // gesture is gone by the time signIn runs
-  await client.signIn({ mode: 'popup' });
+  client.signIn({ mode: 'popup' }).catch(console.error); // ✓ window opens during the click
 });
 ```
 
-If you can't avoid pre-popup async work, switch to `mode: 'redirect'` instead.
+## `Window closed by user` / `Authentication window timed out`
 
-## Popup / silent window never returns a callback
+**Symptom:** a popup (`signIn` / `signOut` with `mode: 'popup'`) or `signInSilent()` rejects with one of these `MonoCloudJsError`s.
 
-**Symptom:** `signIn({ mode: 'popup' })` (or `signOut({ mode: 'popup' })`) rejects with `MonoCloudJsError: Window closed by user`, or — after a long wait — `MonoCloudJsError: Authentication window timed out`.
+**Causes:**
 
-**Cause:** The SDK polls the popup every 100 ms and rejects as soon as it is closed before posting its callback; a separate timer rejects once the window outlives `authWindowTimeout` (default `600` seconds). `signInSilent()` uses the same machinery, so a hidden iframe that never reaches the callback URL times out with the identical error.
+- The user closed the popup (checked every 100 ms).
+- The returning page never reported back: the app at `callbackPath` / `signOutPath` didn't load or didn't call `processCallback()` — for the silent iframe, also your own framing protections (`X-Frame-Options`, CSP `frame-ancestors`) on that page.
+- `appUrl`'s origin differs from the page's real origin, so the `postMessage` is dropped.
+- Popup sign-out with a `postLogoutRedirectUri` other than `appUrl + signOutPath`.
+- Timeout after `authWindowTimeout` (default 600 s).
 
-**Fix:** Treat both as user/environment conditions rather than bugs — catch `MonoCloudJsError` and re-offer the sign-in button. Lower `authWindowTimeout` if 10 minutes of a stuck popup is too long for your UX.
+**Fix:** treat closing as a user action (show the button again); make the callback page load the app and call `processCallback()`; align `appUrl`; lower `authWindowTimeout` for faster failure.
 
-```ts
-try {
-  await client.signIn({ mode: 'popup' });
-} catch (e) {
-  if (e instanceof MonoCloudJsError) {
-    // window closed, blocked, or timed out — show the sign-in button again
-  } else {
-    throw e;
-  }
-}
-```
+## `signInSilent()` rejects with `login_required`
 
-## Silent sign-in always rejects with `login_required`
+**Cause:** no MonoCloud session cookie reached the hidden iframe — the user isn't signed in at MonoCloud, or the browser blocks or partitions third-party cookies (Safari and Firefox do by default), especially when the tenant is on a different site than the app.
 
-**Symptom:** `signInSilent()` throws `MonoCloudOPError` with `error: 'login_required'`, even when the user is signed in elsewhere with the same tenant.
+**Fix:** treat `MonoCloudOPError` (`login_required`, `interaction_required`) as "show the sign-in button". Keep the app's own session alive with refresh tokens (`offline_access` + `getTokens()`), which don't depend on third-party cookies.
 
-**Cause(s)** (in order of likelihood):
+## `Cannot create iframe in a cross-origin-isolated context`
 
-1. The user has no active session at the **MonoCloud IdP** (different from a local app session) — silent only works when MonoCloud already has a session cookie.
-2. Third-party cookies are blocked. Hidden-iframe `prompt=none` flows post the OP's session cookie cross-origin; modern browsers (Safari ITP, Firefox ETP, Chrome 3rd-party cookie deprecation) block this for many configurations.
-3. The MonoCloud tenant domain is on a completely different eTLD+1 from the app — third-party cookie restrictions apply more strictly there.
+**Cause:** the page is cross-origin isolated (`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`), which rules out the silent-sign-in iframe.
+
+**Fix:** drop isolation for these pages, or skip `signInSilent()` and rely on refresh tokens.
+
+## `Cannot start a redirect sign-in from inside an iframe: …`
+
+Also `Cannot start a redirect sign-out from inside an iframe: …` (federated sign-out only; the local session is kept).
+
+**Cause:** your app is itself rendered inside an iframe; MonoCloud's pages can't be displayed framed.
+
+**Fix:** use `mode: 'popup'`, or run the app top-level.
+
+## `MonoCloudJsError: Failed to acquire lock…`
+
+**Cause:** `signInSilent`, `refreshSession`, `refetchUserInfo` and `getTokens` share one lock per client (across tabs); a call waited more than 5 s — e.g. `getTokens()` while a slow `signInSilent()` runs. Non-secure origins use the `browser-tabs-lock` fallback.
+
+**Fix:** don't fire token calls while a silent sign-in is pending; retry after it settles.
+
+## No refresh token
+
+**Symptom:** `refreshSession()` → `MonoCloudValidationError: Refresh token not found. Sign in with offline_access scope to get the refresh token.`; `getTokens()` (once the token is missing or expiring, or with `forceRefresh`) → `MonoCloudValidationError: Session does not contain refresh token`.
+
+**Cause:** `offline_access` wasn't granted at sign-in (scope not requested, or offline access not allowed on the client).
+
+**Fix:** add `offline_access` to `defaultAuthParams.scopes`, enable offline access on the client, and sign in again — refresh tokens are issued only at authorization.
+
+## Refresh fails with `MonoCloudOPError` (`invalid_grant`)
+
+**Cause:** the refresh token expired or was revoked.
+
+**Fix:** catch it and start a new sign-in (`signIn()` or `signInSilent()`).
+
+## `session.user` is empty, or `Fetching userinfo requires the openid scope`
+
+**Cause:** scopes were configured (per call, `defaultAuthParams.scopes` or `resources[].scopes`) without `openid` — the `openid profile email` default only applies when no scopes are configured anywhere.
+
+**Fix:** `defaultAuthParams: { scopes: 'openid profile email offline_access' }`.
+
+## The API rejects the access token
+
+**Causes:** the token is for a different `resource`/audience; the API's scopes weren't requested at sign-in; or `getTokens()` without arguments returned the sign-in token, not the API's.
 
 **Fix:**
 
-- Treat `login_required` as the normal "user needs to sign in interactively" signal. Catch it and fall back to `signIn()`:
-
-  ```ts
-  try {
-    await client.signInSilent();
-  } catch (e) {
-    if (e instanceof MonoCloudOPError && e.error === 'login_required') {
-      // Show the sign-in button — silent restore isn't possible.
-    } else {
-      throw e;
-    }
-  }
-  ```
-
-- For long-lived sessions across reloads, prefer refresh tokens (`offline_access`) over silent: refresh tokens don't depend on third-party cookies.
-
-## `signInSilent()` throws "Cannot create iframe in a cross-origin-isolated context"
-
-**Symptom:** `MonoCloudJsError: Cannot create iframe in a cross-origin-isolated context`.
-
-**Cause:** Your app sets `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` (often to enable `SharedArrayBuffer` / WebAssembly threads). In that mode, the hidden iframe the SDK uses for `prompt=none` is blocked.
-
-**Fix:** Either drop cross-origin isolation for the auth flow, or skip silent sign-in entirely and use refresh tokens (`offline_access`) + `getTokens()` to keep the session alive.
-
-## "Cannot start a redirect sign-in from inside an iframe"
-
-**Symptom:** `MonoCloudJsError: Cannot start a redirect sign-in from inside an iframe…`. Happens when the app itself is framed in another site.
-
-**Cause:** MonoCloud's hosted sign-in page sets framing protections — it can't be rendered in a child frame. The SDK detects the framed context and throws before navigating.
-
-**Fix:** Either:
-
-- Use `signIn({ mode: 'popup' })` — the popup opens at the top level and is allowed.
-- Move the redirect to the top window via `window.top.location` (only works if the parent is same-origin; otherwise the popup approach is the right call).
-
-The same restriction applies to `signOut()` when `federatedSignOut` is `true`.
-
-## `MonoCloudValidationError: Refresh token not found`
-
-**Symptom:** `refreshSession()` throws `MonoCloudValidationError: Refresh token not found. Sign in with offline_access scope to get the refresh token.` The auto-refresh inside `getTokens()` has no pre-check of its own, so it surfaces the core client's message instead: `MonoCloudValidationError: Session does not contain refresh token`. Same cause, two different strings.
-
-**Cause:** The authorization server only issues a refresh token when `offline_access` is in the granted scopes. Missing it is the most common cause.
-
-**Fix:** Add `offline_access` to the scopes — either globally on the client or per-call:
-
 ```ts
 new MonoCloudWebJSClient({
-  // ...
+  // …
   defaultAuthParams: { scopes: 'openid profile email offline_access' },
+  resources: [{ resource: 'https://api.example.com', scopes: 'read:data write:data' }], // added to sign-in
 });
 
-// or per-call
-await client.signIn({ scopes: 'openid profile email offline_access' });
+const { accessToken } = await client.getTokens({ resource: 'https://api.example.com' });
 ```
 
-Then sign in again — refresh tokens are issued at the original authorization, not retroactively.
+## ID-token validation errors (`MonoCloudTokenError`)
 
-## `getTokens()` returns a token but the API still 401s
+| Message | Cause → fix |
+| --- | --- |
+| `Invalid Issuer` | `tenantDomain` differs from the token's `iss` (e.g. default vs custom domain) → use the issuer URL. |
+| `Invalid audience claim` | `clientId` doesn't match the client that issued the token. |
+| `Invalid signing alg` | Token header `alg` ≠ `idTokenSigningAlgorithm` (default `RS256`) → set it to the client's algorithm. |
+| `JWT signature verification failed` | Token not signed by the tenant's keys (wrong tenant, tampered token). |
+| `Nonce mismatch` | Callback from another attempt or replayed → restart sign-in. |
+| `Unexpected JWT "exp" (expiration time) claim value, timestamp is <= now()` / `Unexpected JWT "nbf" (not before) claim value, timestamp is > now()` | Device clock off by more than `clockTolerance` (60 s) → fix the clock, raise `clockTolerance`, or offset a known drift with `clockSkew`. |
+| `Too much time has elapsed since the last End-User authentication` | `maxAge` exceeded. |
+| `Failed to parse JWT Header` / `Failed to parse JWT Payload` | Header or payload isn't base64url-encoded UTF-8 JSON. |
+| `Could not parse payload. Malformed payload` | Same, from `MonoCloudOidcClient.decodeJwt()` (used when `validateIdToken: false`, and to re-read the stored ID token when a refresh returns none). |
 
-**Symptom:** `getTokens({ resource: 'https://api.example.com' })` resolves, but the API rejects the token with 401 / `invalid_audience`.
+UserInfo 401/403 also raises `MonoCloudTokenError` (message `<error>: <description>`; `.code` `'insufficient_scope'` or `'invalid_token'`).
 
-**Cause(s):**
+## Session lost on reload, or a full page load after sign-in
 
-1. The audience the API expects doesn't match the `resource` you requested.
-2. You configured `resource` on `defaultAuthParams` but the API expects a different one — `getTokens()` falls back to that default when you don't pass `resource`.
-3. The scope the API requires wasn't requested at sign-in (and `offline_access` isn't enough — it needs the API's scope too).
+**Causes:**
 
-**Fix:**
+- `storage: new MemoryStorage()` — memory is cleared by every full page load; `SessionStorage` doesn't carry over to new tabs.
+- The default `postCallback` performs a full page load when `returnUrl` is set (with `MemoryStorage` this wipes the session it just stored).
 
-- Confirm the API resource indicator string and required scopes from the MonoCloud dashboard's **API Resources** area.
-- Pre-register the audience in `resources`:
+**Fix:** keep `LocalStorage`, or pass a `postCallback` that navigates with your router.
 
-  ```ts
-  new MonoCloudWebJSClient({
-    // ...
-    defaultAuthParams: { scopes: 'openid profile email offline_access' },
-    resources: [{ resource: 'https://api.example.com', scopes: 'read:data write:data' }],
-  });
+## `returnUrl` is ignored
 
-  const { accessToken } = await client.getTokens({ resource: 'https://api.example.com' });
-  ```
+**Symptom:** `console.warn: Ignoring returnUrl "…" because it resolves to a different origin than appUrl.`
 
-- Or request them on the sign-in call:
+**Cause:** the default `postCallback` only follows same-origin `returnUrl`s (open-redirect protection).
 
-  ```ts
-  await client.signIn({
-    scopes: 'openid profile email offline_access read:data write:data',
-    resource: 'https://api.example.com',
-  });
-  ```
+**Fix:** use relative paths such as `/dashboard`. For deliberate cross-origin hops, navigate in a custom `postCallback` with a value you control.
 
-## Session vanishes on every page reload
+## The app navigates after `signInSilent()` or a popup sign-in
 
-**Symptom:** `getSession()` returns `undefined` after a hard refresh, even though the user just signed in.
+**Cause:** a custom `postCallback` navigates unconditionally; it runs for `mode` `'silent'` and `'popup'` too.
 
-**Cause:** `storage` is set to `MemoryStorage` (in-memory only). Reloading the tab wipes it. The same happens if a previous `signIn()` used the default `postCallback`, which does a full page reload — combined with `MemoryStorage` it drops the freshly created session.
+**Fix:** navigate only when `state.mode === 'redirect'` or `state.returnUrl` is set.
 
-**Fix:** Either use `LocalStorage` (default — survives reload, shared across tabs) / `SessionStorage` (per-tab), or pair `MemoryStorage` with a custom `postCallback` that uses your client-side router (no reload):
+## Two clients overwrite each other's session
 
-```ts
-new MonoCloudWebJSClient({
-  // ...
-  storage: new MemoryStorage(),
-  postCallback: state => router.push(state.returnUrl ?? '/'),
-});
-```
+**Cause:** same `clientId` (even with different `tenantDomain`s) → same key `mc.session.<clientId>`.
 
-## `returnUrl` is silently ignored after callback
+**Fix:** give each a distinct `sessionKey`. Pending-flow state stays keyed by `clientId` only, so don't run two redirect flows for the same `clientId` at once.
 
-**Symptom:** You pass `returnUrl: '/dashboard'` to `signIn()`, callback completes, but the user stays on the current URL — with a `console.warn` mentioning origin mismatch.
+## `MonoCloudOPError: access_denied` from `processCallback()`
 
-**Cause:** The default `postCallback` resolves `returnUrl` against `appUrl` and refuses to navigate to a different origin (security hardening — prevents open-redirects via crafted `returnUrl`).
+**Cause:** the user cancelled or declined, or a MonoCloud policy denied access.
 
-**Fix:** Make sure `returnUrl` is **relative** (e.g. `/dashboard`) or starts with the same origin as `appUrl`. Cross-origin redirects are intentional to disallow.
+**Fix:** catch it and show a "sign-in cancelled" state; `e.errorDescription` has the server's text.
 
-If you need to navigate to a different origin after callback, do it in a custom `postCallback`:
+## `clientSecret` flagged in the bundle
 
-```ts
-postCallback: state => {
-  if (state.returnUrl) window.location.href = state.returnUrl;
-}
-```
+**Cause:** `clientSecret` was set on the client. Browser code is public.
 
-…but only if you trust the source of `returnUrl` — never use an attacker-controlled value.
+**Fix:** remove it and use a Single Page Application (public) client — PKCE is automatic with `responseType: 'code'`.
 
-## Default `postCallback` triggers a full page reload
+## APIs that don't exist
 
-**Symptom:** After sign-in, the page does a hard reload. In-memory app state (Redux store, React state, etc.) is wiped.
-
-**Cause:** The default `postCallback` does `window.location.href = returnUrl` when a `returnUrl` is set, which is a full navigation. This is intentional for plain-HTML apps but undesirable for SPAs with a client-side router.
-
-**Fix:** Pass a custom `postCallback` and use your router's push API:
-
-```ts
-import { router } from './router';
-
-new MonoCloudWebJSClient({
-  // ...
-  postCallback: state => {
-    router.push(state.returnUrl ?? '/');
-  },
-});
-```
-
-`state.signOut` distinguishes a sign-out callback from a sign-in callback if you need different behavior.
-
-## Multiple `MonoCloudWebJSClient` instances trampling each other's session
-
-**Symptom:** You instantiate two clients (e.g. for two different tenants or two audiences). Signing in with one wipes the other's session.
-
-**Cause:** Both instances share the same `clientId`, so they hash to the same storage key (`mc.session.<clientId>`).
-
-**Fix:** If the two clients also share `clientId`, pass distinct `sessionKey` strings:
-
-```ts
-const admin = new MonoCloudWebJSClient({ /* ... */ clientId: 'app', sessionKey: 'admin' });
-const user  = new MonoCloudWebJSClient({ /* ... */ clientId: 'app', sessionKey: 'user'  });
-```
-
-When the `clientId`s already differ, this isn't necessary — the SDK keys storage by `clientId` automatically.
-
-If the two clients use **different `tenantDomain`s** but the same `clientId`, you still need a `sessionKey` — the storage key only includes `clientId`, not the domain.
-
-## Custom `IStorage` causes "Promise expected" or stale reads
-
-**Symptom:** A custom storage adapter is being used and methods on the client either reject with type errors or return stale data even after `setItem`.
-
-**Cause:** `IStorage.getItem` / `setItem` / `removeItem` **must** return promises. Returning a raw value works under TypeScript only because the type permits the union — at runtime the SDK awaits the return value.
-
-**Fix:** Wrap synchronous backends with `Promise.resolve(...)`:
-
-```ts
-class SyncBackedStorage implements IStorage {
-  getItem(key: string)  { return Promise.resolve(myMap.get(key) ?? null); }
-  setItem(key, value)   { myMap.set(key, value); return Promise.resolve(); }
-  removeItem(key)       { myMap.delete(key); return Promise.resolve(); }
-}
-```
-
-For truly async backends (IndexedDB, encrypted store), `async` methods are fine — return the promise that resolves once the write is durable.
-
-## `MonoCloudOPError: access_denied` after sign-in
-
-**Symptom:** Callback completes but `processCallback()` throws `MonoCloudOPError` with `error: 'access_denied'`.
-
-**Cause:** The user cancelled the sign-in (closed the consent screen or hit "Decline"), or a policy on the MonoCloud side denied access.
-
-**Fix:** Treat as a user-facing condition, not a bug:
-
-```ts
-try {
-  await client.processCallback();
-} catch (e) {
-  if (e instanceof MonoCloudOPError && e.error === 'access_denied') {
-    // show "sign-in was cancelled" UI
-  } else {
-    throw e;
-  }
-}
-```
-
-## `clientSecret` warning / leaked in the bundle
-
-**Symptom:** A secret-scanner flags `clientSecret` shipping in the SPA bundle, or you notice it in DevTools network calls.
-
-**Cause:** `MonoCloudWebJSClient` exposes `clientSecret` / `clientAuthMethod` for advanced confidential-client setups, but a normal browser SPA is a **public client** and cannot keep a secret. If you've set `clientSecret`, it is in the bundle.
-
-**Fix:** Drop `clientSecret`. Use a public-client configuration in the MonoCloud dashboard (Single Page Application preset), and rely on PKCE (handled automatically by the SDK for the default `responseType: 'code'`).
-
-## Older training-data SDK ghosts
-
-**Symptom:** Code references `MonoCloudAuthProvider`, `useUser`, `useMonoCloud`, a `signinRedirect()` / `signinCallback()` pair, or treats this SDK as if it were `oidc-client-ts`. None of those exist here.
-
-**Cause:** The agent is pattern-matching against an older or unrelated SDK from training data.
-
-**Fix:** Always check the actual surface in [`api-surface.md`](api-surface.md). The real entry is `new MonoCloudWebJSClient(options)`; sign-in is `signIn()`; the callback is `processCallback()`; there is no React provider or hook in this package (use a framework-specific SDK if you want one).
+`UserManager`, `signinRedirect()`, `signinCallback()`, `getUser()` (oidc-client-ts), `MonoCloudAuthProvider`, `useAuth`, `useUser`, `useMonoCloud`, `handleRedirectCallback()`, `loginWithRedirect()`, and subpaths other than `/utils` / `/internal` are not part of this SDK. The real calls are `new MonoCloudWebJSClient(options)`, `processCallback()`, `signIn()`, `signOut()`, `getSession()`, `getTokens()` — see [api-surface.md](api-surface.md).
 
 ## Diagnostic
 
 ```bash
-node skills/monocloud-web-js/scripts/verify.js [project-dir]
+node scripts/verify.js [project-dir]   # run from the skill folder
 ```
 
-Checks that `@monocloud/auth-web-js` is in `package.json`, warns if `clientSecret` is referenced anywhere in source (a sign of a misconfigured public client), and warns when the project also has a framework SDK installed (where the framework SDK is probably the right choice instead).
+[`../scripts/verify.js`](../scripts/verify.js) fails when the dependency is missing or the code imports names or subpaths the package doesn't export, and warns about a missing `processCallback()` call, placeholder values, `clientSecret`, MonoCloud secrets in browser-exposed `.env*` variables, `MONOCLOUD_AUTH_*` variables (never read by this SDK), non-`VITE_` `import.meta.env` reads, `MemoryStorage` without `postCallback`, token calls without `offline_access`, and projects better served by `@monocloud/auth-react` or `@monocloud/auth-nextjs`.

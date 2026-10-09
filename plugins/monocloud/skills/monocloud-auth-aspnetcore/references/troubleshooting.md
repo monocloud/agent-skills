@@ -1,334 +1,153 @@
 # Troubleshooting — `MonoCloud.Authentication.Api`
 
-Quick reference for the most common things that go wrong when validating MonoCloud-issued access tokens in an ASP.NET Core API, grounded in `MonoCloud.Authentication.Api@0.1.5`. Each entry is **symptom → root cause → fix**.
-
-This SDK is a standard ASP.NET Core **authentication handler / scheme** (built on `Microsoft.AspNetCore.Authentication.JwtBearer`), registered via `AddAuthentication(scheme).AddMonoCloudAuthentication(...)`. It only *authenticates* and shapes claims — authorization (scopes/groups) is the **standard** policy system (`AddAuthorization` / `[Authorize(Policy = …)]` / `RequireClaim`). There is no `protectApi` factory, no `[MonoCloudAuthorize]` attribute, and no environment-variable configuration — those belong to the Node express/fastify SDK, not this one.
-
-## 401 on every request — middleware missing or misordered
-
-**Symptom:** Every protected endpoint returns `401`, even with a valid `Authorization: Bearer <token>` header. No introspection or JWKS traffic appears in logs.
-
-**Cause:** `app.UseAuthentication()` / `app.UseAuthorization()` are missing, in the wrong order, or registered *after* the endpoints. The handler never runs, so no `ClaimsPrincipal` is built and `[Authorize]` fails closed.
-
-**Fix:** Register both, in this order, before `MapControllers()` / endpoint mapping:
-
-```csharp
-var app = builder.Build();
-
-app.UseAuthentication();   // must come first — builds the principal
-app.UseAuthorization();    // then enforces [Authorize] / policies
-
-app.MapControllers();
-app.Run();
-```
-
-`UseAuthentication` must precede `UseAuthorization`. If you use `UseRouting`, both auth calls go **between** `UseRouting` and the endpoint middleware.
-
-## 401 on every request — scheme name mismatch
-
-**Symptom:** Requests fail with `401` and the handler seems never to fire, or you get `InvalidOperationException: No authentication handler is registered for the scheme 'X'`.
-
-**Cause:** The scheme you registered under `AddMonoCloudAuthentication` doesn't match the default challenge scheme (or what `[Authorize(AuthenticationSchemes = …)]` names). The default scheme string is `"MonoCloud"`, held in `MonoCloudAuthenticationDefaults.AuthenticationScheme`.
-
-**Fix:** Register with the constant and make it the default:
-
-```csharp
-builder.Services
-    .AddAuthentication(MonoCloudAuthenticationDefaults.AuthenticationScheme)
-    .AddMonoCloudAuthentication(options => { /* … */ });
-```
-
-`AddAuthentication(scheme)` sets both `DefaultAuthenticateScheme` and `DefaultChallengeScheme`. If you register under a custom scheme name — `AddMonoCloudAuthentication("my-scheme", options => …)` — either pass that same string to `AddAuthentication(...)` or name it explicitly: `[Authorize(AuthenticationSchemes = "my-scheme")]`.
-
-## 401 on JWTs — audience or issuer mismatch
-
-**Symptom:** A valid-looking JWT is rejected; `OnAuthenticationFailed` fires with a `SecurityTokenInvalidAudienceException` or `SecurityTokenInvalidIssuerException`.
-
-**Cause:** The token's `aud` doesn't match `Audience` (which the framework's `JwtBearerPostConfigureOptions` copies into `TokenValidationParameters.ValidAudience`), or the discovery issuer doesn't match the token's `iss`. `Authority` is the tenant domain: the base `JwtBearerHandler` builds the discovery URL as `Authority + "/.well-known/openid-configuration"`.
-
-**Fix:**
-
-1. Decode the token (jwt.io or `dotnet`), compare `aud` against `options.Audience` — it must match **exactly**, including scheme and trailing slash (`https://api.example.com/` ≠ `https://api.example.com`).
-2. Set `Authority` to the bare tenant root, e.g. `https://acme.us.monocloud.com` — **not** the `.well-known` URL. Post-configuration prepends `https://` if you omit the scheme.
-3. `Audience` only feeds `ValidAudience` when `TokenValidationParameters.ValidAudience`/`ValidAudiences` is empty. If you set them directly, that wins and `Audience` is ignored.
-
-```csharp
-options.Authority = "https://acme.us.monocloud.com";
-options.Audience = "https://api.example.com";
-```
-
-## Opaque/reference tokens fail (JWTs work fine)
-
-**Symptom:** Short opaque tokens fail while JWTs succeed — the request returns **HTTP 500** (as of 0.1.4) with `OnAuthenticationFailed` carrying the real introspection exception (transport error, non-2xx response, malformed JSON, or client-auth failure), or throws `ArgumentNullException` naming `ClientId`, `Authority`, or `ClientAuth`.
-
-**Cause:** Opaque (reference) tokens are validated by RFC 7662 introspection, which requires all three: `Authority`, `ClientId`, and a `ClientAuth`. The handler throws `ArgumentNullException("Client ID must be set")` / `("Authority must be set")` in `HandleOpaqueTokenAuthenticationAsync`, and `ArgumentNullException` for a null `ClientAuth` inside `IntrospectTokenAsync`. Pure local-JWT validation needs none of these.
-
-**Fix:** Supply a client identity and authentication method for introspection:
-
-```csharp
-options.Authority  = "https://acme.us.monocloud.com";
-options.ClientId   = builder.Configuration["MonoCloud:ClientId"];
-options.ClientAuth = new ClientSecretAuth(builder.Configuration["MonoCloud:ClientSecret"]!);
-```
-
-`ClientAuth` is one of `ClientSecretAuth`, `JwtAssertionAuth`, `TlsAuth`, `SpiffeJwtAuth`, or `SpiffeX509Auth`. If your tenant issues only JWT access tokens you can leave all three unset.
-
-## Introspection infrastructure failure returns 500, not 401
-
-**Symptom:** An opaque-token request returns **HTTP 500** instead of a `401`. `OnAuthenticationFailed` fires with a real exception — an `HttpRequestException` (transport error or non-2xx introspection response via `EnsureSuccessStatusCode`), a `JsonException` (malformed introspection JSON), a discovery error, or a client-auth failure.
-
-**Cause:** As of 0.1.4 the handler separates introspection **infrastructure** failures from token **verdicts**. Infrastructure failures — and exceptions thrown by your own opaque-path event handlers — raise `OnAuthenticationFailed` with the real exception and then **rethrow**, surfacing as a 500, instead of the old misleading 401 `invalid_token`. Genuine token verdicts (`active: false`, certificate-binding mismatch) still produce a `401`. Note the boundary moved in **0.1.5** for one case: a `CertificateRetriever` that **throws** is now a verdict too — it fails authentication with a 401 `invalid_token` challenge carrying `Client certificate is malformed`, instead of surfacing a 500.
-
-**Fix:** A 500 here means introspection could not complete — verify the tenant is reachable, the introspection endpoint/credentials are correct, and the discovery document is valid. To restore the old behavior and turn an infrastructure failure back into a 401, handle `OnAuthenticationFailed` and set `context.Result`:
+Each entry is symptom → cause → fix. Every exception and message the SDK produces is listed in the [failure reference](api-surface.md#failure-reference). To find which case you hit, log `context.Exception` in `OnAuthenticationFailed`:
 
 ```csharp
 options.Events.OnAuthenticationFailed = ctx =>
 {
-    ctx.Result = AuthenticateResult.Fail(ctx.Exception!);
+    ctx.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>()
+        .LogWarning(ctx.Exception, "MonoCloud authentication failed");
     return Task.CompletedTask;
 };
 ```
 
-## Need real-time revocation — introspect JWTs too
+## Valid tokens get 401 with a bare `WWW-Authenticate: Bearer`
 
-**Symptom:** Local JWT validation is "stale" — a revoked token keeps working until it expires.
+**Symptom:** The challenge has no `error=` (with `IncludeErrorDetails` on), so authentication produced no failure. Either the token never reached the handler, or authorization ran before authentication.
 
-**Cause:** By default, JWT-parseable tokens are validated locally (no network call); only opaque tokens are introspected.
+**Causes and fixes:**
 
-**Fix:** Set `options.IntrospectJwtTokens = true` to force **every** token through introspection. This requires `ClientId` + `Authority` + `ClientAuth` (the opaque path). Cost: a network hop per request — pair it with `EnableCaching` (below) to bound the load.
+- **Middleware order.** Explicit calls must be `app.UseAuthentication()` then `app.UseAuthorization()`, both after an explicit `app.UseRouting()`. `WebApplication` inserts both automatically if you call neither. `Startup`-style pipelines must call both, between `UseRouting()` and `UseEndpoints()`.
+- **The scheme isn't used.** `AddAuthentication()` with no default scheme, or a custom scheme name that `[Authorize]` doesn't reference. Pass `MonoCloudAuthenticationDefaults.AuthenticationScheme` (or your custom name) to `AddAuthentication(…)`, or name it in `[Authorize(AuthenticationSchemes = …)]` / the policy.
+- **The token isn't sent as `Authorization: Bearer <token>`.** If it comes from elsewhere (a cookie, a query string), set `context.Token` in `OnMessageReceived`.
 
-## `IIntrospectionCache not found` / DI scope-validation error at startup
+## JWT rejected with 401 `invalid_token`
 
-**Symptom:** The app throws at startup: `ArgumentException: IIntrospectionCache not found in the services collection`, or a scope-validation error like `Cannot consume scoped service 'IIntrospectionCache' from singleton`.
+The `error_description` in `WWW-Authenticate` (while `IncludeErrorDetails` is on) names the failed check:
 
-**Cause:** `EnableCaching = true` requires an `IIntrospectionCache` implementation in the container, and it **must be a singleton**. `PostConfigureMonoCloudAuthenticationOptions` (which discovers it) is itself a singleton, so a scoped/transient registration fails DI scope validation.
+| `error_description` | Fix |
+| --- | --- |
+| `The audience '…' is invalid` | `Audience` must equal the token's `aud` exactly, including scheme and trailing slash. A `TokenValidationParameters.ValidAudience` you set yourself takes precedence over `Audience`. |
+| `The issuer '…' is invalid` | `Authority` must be the tenant root whose discovery `issuer` equals the token's `iss`. Don't use the discovery URL or add a path. |
+| `The token expired at '…'` / `The token is not valid before '…'` | Fix the host clock; `ClockSkew` (default 5 min) is the tolerance. |
+| `The signature key was not found` | The token is from another tenant, or keys rotated. `RefreshOnIssuerKeyNotFound` (default `true`) already refetches metadata, so check `Authority`. |
+| none | Another validation failure, or discovery/JWKS unreachable. Check the logged exception. |
 
-**Fix:** Register the implementation as a singleton before enabling caching:
+## Opaque tokens fail with 500 (JWTs work)
 
-```csharp
-builder.Services.AddSingleton<IIntrospectionCache, MyRedisCache>();
+**Cause:** an exception on the introspection path propagates.
 
-builder.Services
-    .AddAuthentication(MonoCloudAuthenticationDefaults.AuthenticationScheme)
-    .AddMonoCloudAuthentication(options =>
-    {
-        options.EnableCaching = true;                 // master switch (default false)
-        options.CacheDuration = TimeSpan.FromMinutes(5);
-        // …ClientId / ClientAuth / Authority for the opaque path
-    });
-```
+| Exception | Fix |
+| --- | --- |
+| `ArgumentNullException: Client ID must be set` / `Authority must be set` | Set `ClientId` / `Authority`. These are checked before `OnAuthenticationFailed` runs. |
+| `ArgumentNullException` (parameter `ClientAuth`) | Set `options.ClientAuth`. See [client authentication](../SKILL.md#client-authentication). |
+| `HttpRequestException` | Discovery or the introspection endpoint is unreachable or returned non-2xx. Common causes are rejected client credentials, or a client-auth method the client isn't configured for (e.g. post vs `clientSecretBasic: true`). |
+| `JsonException` | The endpoint returned something other than JSON, e.g. a proxy error page. |
+| `InvalidOperationException: The mTLS introspection endpoint alias was not found …` | See [mTLS introspection alias](#mtls-introspection-alias-not-found). |
+| `InvalidOperationException: The SPIFFE JWT-SVID must not be null or empty` | Your `SpiffeJwtAuth` provider returned nothing. |
 
-`IIntrospectionCache` (namespace `MonoCloud.Authentication.Api.Shared`) has three methods — `Task<string?> GetAsync(string key, CancellationToken)`, `Task SetAsync(string key, string value, TimeSpan expiresIn, CancellationToken)`, and `Task DeleteAsync(string key, CancellationToken)` (added in 0.1.3, never called by the SDK — for consumer-side eviction) — a plain string key/value store; the SDK serializes/deserializes the claim list itself. Only introspection-validated tokens are cached (opaque tokens, plus JWTs when `IntrospectJwtTokens = true`); locally validated JWTs are never cached. A thrown `GetAsync` is caught and logged, then the request falls through to a live introspection; a failing `SetAsync` write is likewise swallowed and logged (as of 0.1.4), so a cache outage degrades gracefully rather than failing requests.
-
-## Scope-based `[Authorize(Policy = …)]` never authorizes
-
-**Symptom:** A policy like `RequireClaim("scope", "read:weather")` returns `403` even though the token clearly grants `read:weather`.
-
-**Cause:** How the `scope` value lands as claims. On the **opaque/introspection** path the `scope` response (a space-delimited string *or* JSON array) is split into **one `Claim` of type `"scope"` per value**, so `RequireClaim("scope", "read:weather")` matches directly. As of 0.1.4 the local-JWT path also splits a space-delimited `scope` into one `"scope"` claim per value, matching the introspection path — so `RequireClaim("scope", "read:weather")` matches directly on both paths.
-
-**Fix:** For opaque tokens, the direct claim policy works:
+An API that only receives JWTs (with `IntrospectJwtTokens` off) can't hit any of these. To report one of these failures as a 401 instead (all but the `ClientId` / `Authority` checks), set a result in the event:
 
 ```csharp
-builder.Services.AddAuthorization(options =>
+options.Events.OnAuthenticationFailed = ctx =>
 {
-    options.AddPolicy("read:weather", p => p.RequireClaim("scope", "read:weather"));
-});
+    if (ctx.Exception is not null) ctx.Fail(ctx.Exception); // 401 instead of a propagated exception
+    return Task.CompletedTask;
+};
 ```
 
-```csharp
-[Authorize(Policy = "read:weather")]           // controller / action
-public IActionResult Get() => Ok();
+## 401 `Token inactive`
 
-// or minimal API:
-app.MapGet("/weather", () => "…").RequireAuthorization("read:weather");
-```
+Introspection returned `active: false`, e.g. the token expired or was revoked. With `EnableCaching`, that verdict is reused until the entry expires; evict it with `DeleteAsync` (see [caching](../SKILL.md#caching-introspection-results)).
 
-## Group policy `[Authorize]` never matches
+## 401 on certificate-bound tokens
 
-**Symptom:** `RequireClaim("groups", "admin")` (or `[Authorize(Roles = "admin")]`) returns `403` for users who are in the group; inspecting the principal shows one `groups` claim whose value is a raw JSON array string.
+The cause is in `context.Exception.Message` ([check order](api-surface.md#certificatebindingvalidation)):
 
-**Cause:** Group expansion via `Utils.NormalizeGroupClaims` runs **only if `RoleClaimType` is non-null** on the opaque path (and uses the `RoleClaimType` fallback on the JWT path). If you never set `options.RoleClaimType`, the `groups` claim is left as the raw array and no per-group claim exists to match.
+| Message | Fix |
+| --- | --- |
+| `Client certificate is not present` | Make Kestrel request client certificates (`ClientCertificateMode`). Behind a TLS-terminating proxy, forward the certificate and read it in `CertificateRetriever`. |
+| `Client certificate is malformed` | Your `CertificateRetriever` threw (see `InnerException`), e.g. while decoding a URL-encoded PEM header. |
+| `Access token does not contain a 'cnf' …` | `Required` mode received an unbound token. Use `WhenPresent` if unbound tokens are acceptable. |
+| `Malformed 'cnf' claim …` / `The 'cnf' claim could not be parsed` / `… does not contain an 'x5t#S256' member …` | The token's `cnf` isn't an RFC 8705 certificate confirmation. |
+| `The certificate hash in the access token does not match …` | The caller (or your proxy) presented a different certificate than the one the token is bound to. |
 
-**Fix:** Tell the handler which claim carries groups:
+`CertificateBindingValidation.DangerouslyIgnore` disables the check. Use it only when binding is enforced elsewhere.
 
-```csharp
-options.RoleClaimType = "groups";   // MonoCloud's group claim
-```
+## mTLS introspection alias not found
 
-`NormalizeGroupClaims` then expands a JSON-array `groups` claim into individual claims of that type: a string array becomes one claim per string; an array of `{id, name}` objects expands into **two** claims per group (one carrying the `id`, one the `name`), so a policy can match either. Because `RoleClaimType` is also the `ClaimsIdentity` role claim type, `[Authorize(Roles = "admin")]` and `User.IsInRole("admin")` work against groups too.
+**Symptom:** `InvalidOperationException: The mTLS introspection endpoint alias was not found in the OpenID configuration …` with `TlsAuth` / `SpiffeX509Auth`.
 
-```csharp
-builder.Services.AddAuthorization(options =>
-{
-    options.AddPolicy("admins", p => p.RequireClaim("groups", "admin"));
-});
-```
+**Cause:** these methods introspect at the discovery document's `mtls_endpoint_aliases.introspection_endpoint`, or with `trustStore` at that store's entry under `mtls_additional_endpoint_aliases`. The alias is missing.
 
-## Claims look wrong / `User.FindFirst("sub")` is null
+**Fix:** enable mutual TLS for the tenant, or check the trust-store id. Also make sure a certificate is actually presented, by passing it to `TlsAuth` / `SpiffeX509Auth` or configuring it on the named client `MonoCloudAuthenticationDefaults.HttpClientName`. Without one, the endpoint rejects the call (`HttpRequestException`).
 
-**Symptom:** `User.FindFirst("sub")`, `"email"`, etc. return null on the JWT path, but the token clearly contains them. The claim types show up as long URIs like `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier`.
+## `IIntrospectionCache not found in the services collection` / scoped-service error
 
-**Cause:** `MapInboundClaims` defaults to **`true`** and proxies to the internal `JsonWebTokenHandler`. With it on, well-known JWT claim types are rewritten to legacy Microsoft WS-* URIs (`sub` → `…/nameidentifier`, `name` → `…/name`, …). Opaque/introspection claims are **not** remapped — this only bites the JWT path.
+`EnableCaching = true` needs an `IIntrospectionCache` registered as a **singleton**: `builder.Services.AddSingleton<IIntrospectionCache, MyCache>()`.
 
-**Fix:** Either turn mapping off to keep short OIDC names, or index by the mapped URI:
+- With nothing registered, the first request through the scheme fails with this `ArgumentException`.
+- A scoped registration fails DI scope validation (`Cannot consume scoped service …`), at `builder.Build()` in Development.
 
-```csharp
-options.MapInboundClaims = false;   // keep "sub", "email", "name" verbatim
-```
+## `ValidateCertificateBinding` won't compile, or "must be a defined CertificateBindingValidation value"
 
-```csharp
-// Then read them by short name:
-var sub = User.FindFirstValue("sub");
-```
+`ValidateCertificateBinding` is a `CertificateBindingValidation` enum. Assigning a lambda gives `CS1660: Cannot convert lambda expression to type 'CertificateBindingValidation'`, so use `WhenPresent`, `Required` or `DangerouslyIgnore`. The `ArgumentException` means an undefined value, e.g. a number bound from configuration. Use the value names instead.
 
-If you leave mapping on, set `NameClaimType` / `RoleClaimType` to the mapped URIs (or use `ClaimTypes.NameIdentifier`) so `User.Identity.Name` and role checks resolve.
+## Scope policy returns 403
 
-## mTLS certificate-binding validation failing
+403 means the caller is authenticated but the policy failed.
 
-**Symptom:** Certificate-bound tokens are rejected with a 401; `OnAuthenticationFailed` reports one of: `"Client certificate is malformed"`, `"Client certificate is not present"`, `"Access token does not contain a 'cnf' … claim"`, `"Malformed 'cnf' claim …"`, `"The 'cnf' claim does not contain an 'x5t#S256' member …"`, or `"… certificate binding validation failed"`. Or: binding starts failing right after upgrading to 0.1.5 on traffic that previously passed.
+- **Wrong claim type.** MonoCloud scopes are `scope` claims, one per value. A policy on `scp` or `http://schemas.microsoft.com/identity/claims/scope` never matches. Use `RequireClaim("scope", "<value>")`.
+- **The token lacks the scope.** Check what was requested, and the API's default scopes in the MonoCloud dashboard.
 
-**Cause:** As of **0.1.5** `options.ValidateCertificateBinding` is a `CertificateBindingValidation` **enum** (through 0.1.4 it was a `Func<HttpContext, bool>` defaulting to `_ => false`, i.e. never validating), and the new default `WhenPresent` **validates whenever the token's `cnf` claim carries an `x5t#S256` thumbprint** — so bound tokens that used to sail through are now checked. When validation runs, the handler compares the presented client cert's base64url SHA-256 thumbprint against `cnf.x5t#S256` (constant-time). Failures: `CertificateRetriever` threw (`Client certificate is malformed` — a 401 verdict as of 0.1.5, no longer a 500), no client cert reached the handler, the token carries no `cnf` (only under `Required`), or the thumbprints differ.
+## Group or role policy returns 403
 
-**Fix:**
+- **`RoleClaimType` isn't `"groups"`.** `{ "id", "name" }` group objects stay as raw JSON strings, and `[Authorize(Roles = …)]` / `IsInRole` look at a different claim type.
+- **Set on the wrong object.** Set it on the MonoCloud options, not on `TokenValidationParameters`, because the introspection path reads only the options.
 
-1. Pick the mode that matches the endpoint's contract — it is set once on the options, not per request:
-   ```csharp
-   options.ValidateCertificateBinding = CertificateBindingValidation.WhenPresent;       // default — validate cnf-bearing tokens
-   options.ValidateCertificateBinding = CertificateBindingValidation.Required;          // also reject tokens with no cnf (replaces `_ => true`)
-   options.ValidateCertificateBinding = CertificateBindingValidation.DangerouslyIgnore; // opt out entirely (replaces `_ => false`)
-   ```
-2. Make sure the client certificate actually reaches the app. By default the cert is read via `context.Connection.GetClientCertificateAsync()`. Behind a reverse proxy/load balancer that terminates TLS (nginx, ALB, YARP), forward the client cert and supply a custom retriever:
-   ```csharp
-   options.CertificateRetriever = ctx =>
-   {
-       var pem = ctx.Request.Headers["X-Client-Cert"].FirstOrDefault();
-       return Task.FromResult(pem is null
-           ? null
-           : X509Certificate2.CreateFromPem(Uri.UnescapeDataString(pem)));
-   };
-   ```
-   In Kestrel, also configure `ClientCertificateMode` so the cert is negotiated. This cert-*binding* feature (validating the caller's token) is independent of mTLS client-*auth* (`TlsAuth`, below).
+Policies can match the group id or the name.
 
-## `InvalidOperationException` about the mTLS introspection alias
+## `User.FindFirst("sub")` or `User.Identity.Name` is null
 
-**Symptom:** Using `TlsAuth` or `SpiffeX509Auth`, introspection throws `InvalidOperationException: The mTLS introspection endpoint alias was not found in the OpenID configuration`.
+- **`MapInboundClaims` (default `true`) renames claims on the JWT path.** `sub` becomes `ClaimTypes.NameIdentifier`, `email` becomes `ClaimTypes.Email`. Set `options.MapInboundClaims = false` or read the mapped types. Introspected claims are never renamed, so behavior differs between paths until mapping is off.
+- **`Identity.Name` reads `NameClaimType`.** Point it at a claim the token carries (e.g. `"sub"` with mapping off). See [claims shaping](api-surface.md#claims-shaping).
 
-**Cause:** When `ClientAuth` is `TlsAuth`/`SpiffeX509Auth`, the introspection endpoint is resolved from the discovery doc's `mtls_endpoint_aliases.introspection_endpoint` (or, when a `trustStore` is set, the matching entry under `mtls_additional_endpoint_aliases`). If that alias is absent, the SDK throws rather than falling back to the plain endpoint.
+## `The MetadataAddress or Authority must use HTTPS unless disabled for development …`
 
-**Fix:** Ensure the tenant/discovery document exposes mTLS endpoint aliases (mutual-TLS must be enabled for the tenant). Also note: a `TlsAuth` constructed **with** an `X509Certificate2` makes `PostConfigure` build a dedicated `HttpClient` carrying that cert; a `TlsAuth()` **without** one means *you* must attach the client cert to `options.HttpClient`'s handler yourself.
+An `http://` `Authority` requires `RequireHttpsMetadata = false`. Use that only for local development.
 
-```csharp
-options.ClientAuth = new TlsAuth(clientCertificate);   // dedicated HttpClient built for you
-```
+## A revoked token is still accepted
 
-## 401 with a `WWW-Authenticate` header — reading the RFC 6750 challenge
+- **JWT path.** It validates locally and can't see revocation. Set `IntrospectJwtTokens = true` (one introspection call per request, or per cache TTL with caching).
+- **Cached introspection.** The entry lives until its TTL. Lower `CacheDuration`, or call `DeleteAsync` with the key from `CacheKeyGenerator` ([eviction](api-surface.md#iintrospectioncache)).
 
-**Symptom:** A client sees `401` with a `WWW-Authenticate: Bearer error="invalid_token", error_description="…"` header and wants to know where the detail comes from, or wants to suppress the `error_description`.
+## Two schemes share cache entries
 
-**Cause:** As of 0.1.3 the handler emits a standards-compliant RFC 6750 bearer challenge on 401. The `error_description` portion is gated by the inherited `IncludeErrorDetails` option, which **defaults to `true`**.
+The default key includes the scheme name. A custom `CacheKeyGenerator` can't read it (the scheme name is internal), so give each scheme a distinct `CacheKeyPrefix`.
 
-**Fix:** Nothing is wrong — clients may parse `WWW-Authenticate` for the error. To omit `error_description` (e.g. to avoid leaking validation detail to callers), set:
+## `InvalidOperationException: Scheme already exists`
 
-```csharp
-options.IncludeErrorDetails = false;
-```
+The same scheme name was registered twice, e.g. `AddMonoCloudAuthentication()` plus `AddMonoCloudAuthentication(o => …)`. Make it one call, or use distinct names for multiple schemes.
 
-## Tokens rejected just outside their validity window (clock skew)
+## Build and restore errors
 
-**Symptom:** Freshly issued or near-expiry JWTs intermittently fail with `SecurityTokenExpiredException` / `SecurityTokenNotYetValidException` on one server but not another.
+| Error | Fix |
+| --- | --- |
+| `NU1202` (package not compatible with the target framework) | The package targets `net8.0`, `net9.0` and `net10.0`, so target `net8.0` or later. |
+| `AddMonoCloudAuthentication` / `MonoCloudAuthenticationOptions` not found | Add `using MonoCloud.Authentication.Api;` and the `MonoCloud.Authentication.Api` package. `MonoCloud.Management` is a different SDK. |
+| `CS1061` / `CS0117` on `TenantDomain`, `ClientSecret` or `JwtTokenValidationParameters` | These members don't exist. Use `Authority`, `ClientAuth = new ClientSecretAuth(…)` and `TokenValidationParameters`. |
+| `UseMonoCloudAuthentication`, `AddMonoCloud`, `[MonoCloudAuthorize]`, `protectApi` not found | They don't exist. Use `AddMonoCloudAuthentication` with `UseAuthentication()` / `UseAuthorization()` and standard `[Authorize]` policies. |
+| `CS0122` on `SchemeName` or `PostConfigureMonoCloudAuthenticationTimeProvider` | Both are internal. |
 
-**Cause:** `ClockSkew` is **`null`** by default, which means the framework default of **5 minutes** applies (not zero). Server clock drift beyond that window causes rejections.
+## Diagnostic script
 
-**Fix:** First fix clock sync (NTP). To tighten or loosen the allowance explicitly:
+From this skill's directory, run `node scripts/verify.js [project-dir]` ([source](../scripts/verify.js)). It is pure Node and needs no .NET SDK. It checks:
 
-```csharp
-options.ClockSkew = TimeSpan.FromMinutes(2);
-```
-
-Setting `ClockSkew` overrides the validation parameters' `ClockSkew` on the JWT path. Don't set it to `TimeSpan.Zero` in production unless every host is tightly time-synced.
-
-## Multiple schemes share cached claims for the same token
-
-**Symptom:** Two MonoCloud schemes (e.g. different audiences) return each other's cached claims for the same token string when `EnableCaching` is on.
-
-**Cause:** Rare, because the default persisted cache key already includes the scheme name. `CacheKeyGenerator` defaults to `Utils.CacheKeyGenerator` = `CacheKeyPrefix + Base64(SHA256("{SchemeName}|{token}"))`, and `SchemeName` is assigned per scheme in `PostConfigure` — so distinct schemes normally do **not** collide. A collision means a custom `CacheKeyGenerator` dropped the scheme discriminator, or two schemes share `CacheKeyPrefix` *and* a custom generator that ignores the scheme.
-
-**Fix:** Keep the scheme discriminator. If you must customize, give each scheme a distinct `CacheKeyPrefix` and/or retain `SchemeName` in your generator:
-
-```csharp
-options.CacheKeyPrefix = "api-a:";
-// or a custom generator that still namespaces by scheme:
-options.CacheKeyGenerator = (opts, token) => $"{opts.CacheKeyPrefix}{opts.SchemeName}:{Hash(token)}";
-```
-
-Note the **in-flight de-dupe** dictionary (which collapses concurrent introspections of the same token) is keyed by **scheme name + token** (as of 0.1.4); it is a concurrency collapse, not a result cache, and concurrent introspections of the same token under different schemes no longer share a result.
-
-## Signing-key rotation causes transient JWT failures
-
-**Symptom:** After the tenant rotates signing keys, valid tokens briefly fail with `SecurityTokenSignatureKeyNotFoundException` until the process restarts or the metadata refresh interval elapses.
-
-**Cause:** Discovery metadata (including JWKS) is fetched by a `ConfigurationManager` with `AutomaticRefreshInterval` / `RefreshInterval` defaults; a new signing key may not be cached yet.
-
-**Fix:** Enable on-demand refresh so an unknown `kid` triggers a re-fetch:
-
-```csharp
-options.RefreshOnIssuerKeyNotFound = true;
-```
-
-When set, a `SecurityTokenSignatureKeyNotFoundException` calls `ConfigurationManager.RequestRefresh()`. You can also shorten `options.RefreshInterval` / `options.AutomaticRefreshInterval`, or pre-supply metadata via `options.Configuration` / `options.ConfigurationManager` for air-gapped setups.
-
-## Wrong package — `MonoCloud.Management` instead of `MonoCloud.Authentication.Api`
-
-**Symptom:** `AddMonoCloudAuthentication`, `MonoCloudAuthenticationOptions`, or `MonoCloudAuthenticationDefaults` won't resolve; the only MonoCloud types available are `MonoCloudManagementClient`, `Users`, `Clients`, etc.
-
-**Cause:** The project references `MonoCloud.Management` (the server-side admin SDK for the Management API) rather than `MonoCloud.Authentication.Api` (the token-validation handler). They are different packages for different jobs.
-
-**Fix:** Install the authentication package and import its namespaces:
-
-```bash
-dotnet add package MonoCloud.Authentication.Api
-```
-
-```csharp
-using MonoCloud.Authentication.Api;                    // extension, defaults, options, events, handler
-using MonoCloud.Authentication.Api.Shared;             // IIntrospectionCache, JwtAssertion
-using MonoCloud.Authentication.Api.Shared.ClientAuth;  // IMonoCloudClientAuth + ClientSecretAuth / TlsAuth / …
-```
-
-Use `MonoCloud.Management` only to *call* the admin API (create users, list clients); use `MonoCloud.Authentication.Api` to *protect* an API with incoming access tokens. Note the NuGet id is `MonoCloud.Authentication.Api` — `@monocloud/authentication-api` is the internal Changesets tooling name, not a package you install.
-
-## `NETSDK` / target-framework error — package won't restore
-
-**Symptom:** `error NU1202: Package MonoCloud.Authentication.Api 0.1.5 is not compatible with …`, or restore fails on an older project.
-
-**Cause:** The package targets **net8.0, net9.0 and net10.0** (the `net6.0`/`net7.0` targets were dropped in 0.1.3). A project on `net6.0`, `net7.0`, `netstandard2.0`, `netcoreapp3.1`, `net5.0`, or `net framework` cannot consume it.
-
-**Fix:** Target `net8.0` or newer:
-
-```xml
-<TargetFramework>net8.0</TargetFramework>
-```
-
-The correct `Microsoft.AspNetCore.Authentication.JwtBearer` version is selected per-TFM by the package — you do not add it yourself for the handler to work.
-
-## Older training-data SDK ghosts
-
-**Symptom:** Code references APIs that don't compile: `UseMonoCloudAuthentication()` middleware, `[MonoCloudAuthorize]`, `protectApi(...)`, `AuthenticatedRequest`, `MONOCLOUD_*` env-var configuration, or an `options.ClientSecret` string property.
-
-**Cause:** The agent is pattern-matching against the Node express/fastify SDK or an imagined API. This is a .NET **authentication handler**, not a middleware you write or an env-driven library.
-
-**Fix:** The real surface:
-
-- Register the scheme: `AddAuthentication(MonoCloudAuthenticationDefaults.AuthenticationScheme).AddMonoCloudAuthentication(options => …)`, then `app.UseAuthentication(); app.UseAuthorization();`. There is no `UseMonoCloudAuthentication()` middleware.
-- Authorization is **standard ASP.NET Core** — `AddAuthorization`, `AddPolicy`, `RequireClaim`, `[Authorize(Policy = …)]`, `.RequireAuthorization(…)`. There is no `[MonoCloudAuthorize]` attribute and no `protectApi` factory.
-- There is **no** `options.ClientSecret` string — client authentication is an `IMonoCloudClientAuth` object assigned to `options.ClientAuth` (e.g. `new ClientSecretAuth("secret")`).
-- The SDK reads **no environment variables** of its own. Configure via the `Action<MonoCloudAuthenticationOptions>` or bind `MonoCloudAuthenticationOptions` from `IConfiguration`.
-- Read claims with the standard `ClaimsPrincipal` — inject `ClaimsPrincipal user` (minimal APIs) or use `User` / `HttpContext.User` (controllers). There is no `req.claims` / `AuthenticatedRequest`.
-
-## Diagnostic
-
-```bash
-node skills/monocloud-auth-aspnetcore/scripts/verify.js /path/to/project
-```
-
-The verify script is pure Node (no .NET required) — it parses `*.csproj` for the `MonoCloud.Authentication.Api` `PackageReference` and target framework, scans `Program.cs` for `AddMonoCloudAuthentication` plus `UseAuthentication` / `UseAuthorization` ordering, checks `appsettings*.json` for the options section, and warns if a client secret literal is committed to configuration. See [`api-surface.md`](api-surface.md) for the complete option, client-auth, and event inventory.
+- the package reference and target framework;
+- `AddMonoCloudAuthentication` and middleware order;
+- `Authority` / `Audience`;
+- `ClientId` / `ClientAuth` pairing and committed secrets;
+- the cache lifetime;
+- the group / role setup;
+- the `ValidateCertificateBinding` type;
+- options that don't exist.

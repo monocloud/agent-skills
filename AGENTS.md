@@ -43,6 +43,7 @@ Body conventions, drawn from the existing skills:
 - **Keep `SKILL.md` actionable; push depth into `references/`.** Common reference files are `api-surface.md` (the full export/method surface) and `troubleshooting.md`. Link to them rather than inlining everything.
 - **Prefer tables** for env vars, subpath exports, and method surfaces — that's the house style.
 - **Ground every API claim in the real SDK.** Do not invent methods or exports. Verify symbol names, signatures, and env var names against the actual SDK source or the official docs at <https://www.monocloud.com/docs> before writing them down.
+- **Describe only the current SDK release.** No version history, migration notes, or compatibility caveats ("as of 0.x", "since 0.x", "added in 0.x", "was … through 0.y", "after upgrading…") — state facts as current behavior and drop anything that only mattered for an upgrade. On an SDK sync, rewrite the affected sections; don't append deltas. The one version number is a `Verified against <package>@<version> (monocloud/<repo> @ <sha>)` stamp at the top of `references/api-surface.md`, updated on every sync.
 - **Scripts stay pure Node, no dependencies, cross-platform.** `verify.js` diagnoses an integration in a target project; `detect.js` (quickstart only) routes to the right skill. Keep them `node scripts/foo.js [project-dir]` invocable with no install step.
 
 ## When you add, rename, or remove a skill
@@ -54,14 +55,14 @@ Keep these in sync — they are not auto-generated:
 3. Cross-references inside **`monocloud-quickstart`** (`SKILL.md` routing table and `scripts/detect.js`) if the change affects framework detection.
 4. `keywords` / `description` in **`plugins/monocloud/.claude-plugin/plugin.json`** and both `marketplace.json` files if the plugin's scope changed.
 
-Bump `version` in `plugin.json` and both marketplace manifests together when releasing.
+Bump `version` in both `plugin.json` files (`plugins/monocloud/.claude-plugin/` and `plugins/monocloud/.cursor-plugin/`) and both marketplace manifests together when releasing.
 
 ## Validation
 
 There is no test suite. Before committing changes to a skill:
 
 - Run its script against a sample project, e.g. `node plugins/monocloud/skills/<skill>/scripts/verify.js /path/to/app`, and `node plugins/monocloud/skills/monocloud-quickstart/scripts/detect.js /path/to/app`.
-- Confirm `SKILL.md` frontmatter parses (valid YAML, `name` matches the directory).
+- Confirm `SKILL.md` frontmatter parses (valid YAML, `name` matches the directory) — `gh skill publish --dry-run` checks this against the agentskills.io rules.
 - Sanity-check relative links to `references/` and `scripts/` resolve.
 
 ## Conventions

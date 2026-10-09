@@ -1,275 +1,221 @@
 ---
 name: monocloud-auth-express
-description: Use when integrating MonoCloud access-token validation into an Express API — installing or configuring `@monocloud/backend-node/express`, wiring the `protectApi()` middleware factory, validating JWT or opaque (introspection) bearer tokens, enforcing scopes/groups, attaching `claims` to `req` via `AuthenticatedExpressRequest`, or troubleshooting `MONOCLOUD_BACKEND_*` env vars / audience / JWKS / mTLS certificate binding.
+description: Use when protecting an Express API with MonoCloud access tokens — installing `@monocloud/backend-node` (`/express` subpath), wiring the `protectApi()` middleware factory (`protect()`, `protect({ scopes, groups })`, `app.use(protect())`), validating JWT (JWKS) or opaque (introspection) bearer tokens, reading `req.claims` via `AuthenticatedExpressRequest`, custom `tokenResolver` / `certificateResolver`, an `IIntrospectionCache`, mTLS certificate binding (`validateCertificateBinding` `when_present` / `required` / `dangerously_ignore`, `cnf` / `x5t#S256`), or validating tokens without a framework (`node:http`, Koa, Hono) via root `MonoCloudBackendNodeClient.validateAccessToken()`; also for troubleshooting `MONOCLOUD_BACKEND_*` env vars (`MONOCLOUD_BACKEND_TENANT_DOMAIN`, `MONOCLOUD_BACKEND_AUDIENCE`), 401 `invalid_token` / 403 `insufficient_scope` / 500 / 503 responses, or errors like `Invalid audience claim`, `Token introspection is not configured`, `Client certificate is not present`.
 license: MIT
 ---
 
-# MonoCloud Express API protection (`@monocloud/backend-node/express`)
+# MonoCloud API protection for Express (`@monocloud/backend-node/express`)
 
-Backend SDK for validating MonoCloud-issued access tokens in Express APIs. Handles JWT signature verification (via JWKS) and opaque-token introspection automatically based on token format.
+Validates MonoCloud-issued bearer access tokens: JWTs (three dot-separated segments) locally against the tenant's JWKS, any other (opaque) token through token introspection (RFC 7662), then enforces scopes, groups and mTLS certificate binding. It only validates tokens — it does not sign users in or keep sessions.
 
-## Package identity — read this first
+## Package identity — read first
 
-**Use:** `@monocloud/backend-node` with the `/express` subpath. This is a single npm package that also ships `/fastify`.
+Check `package.json` before suggesting code. There is one package, `@monocloud/backend-node`:
 
-This is **not** the same SDK as `@monocloud/auth-nextjs` (frontend, user sessions) or `@monocloud/auth-node-core` (server-side auth flows). This package is purely for **API protection** — validating tokens issued elsewhere, not signing users in.
+| Import from | Provides |
+| --- | --- |
+| `@monocloud/backend-node/express` | `protectApi`, `AuthenticatedExpressRequest`, `ProtectMiddleware`, plus the client, errors and types |
+| `@monocloud/backend-node` | `MonoCloudBackendNodeClient`, errors, types — **no `protectApi`** |
+| `@monocloud/backend-node/fastify` | The Fastify hook — use the `monocloud-auth-fastify` skill |
+| `@monocloud/backend-node/utils` | `isUserInGroup()` for custom group checks |
 
-If you see any of these symbols, they belong to a different package or an older SDK — do not use them here:
+Requires Node.js `>=20` and `express` `^4.17.0 || ^5.0.0` (add `@types/express` for TypeScript).
 
-- `expressJwt`, `expressOAuth2BearerToken`, `passport-*` (other libraries)
-- `requireAuth`, `requireScopes` as standalone functions (this SDK uses one chained call)
-- Importing from `@monocloud/backend-node` root for Express middleware (use the `/express` subpath)
+Do not mix up:
 
-## Installation
+- `@monocloud/auth-nextjs` / `@monocloud/auth-node-core` — user sign-in and sessions, configured with `MONOCLOUD_AUTH_*`. The package name is `@monocloud/backend-node`, not `@monocloud/node-backend`.
+- Other libraries' APIs: `auth()` / `requiredScopes()` (`express-oauth2-jwt-bearer`), `expressjwt()` (`express-jwt`), passport strategies, standalone `requireAuth()` / `requireScopes()`. Validated claims are on `req.claims`, not `req.auth` or `req.user`.
+
+## Install and configure
 
 ```bash
 npm install @monocloud/backend-node
 ```
 
-## Environment variables
+Create an **API** in the MonoCloud dashboard; its **Audience** is `MONOCLOUD_BACKEND_AUDIENCE`, and tokens must be issued for it (e.g. `resource=<audience>` on the token request).
 
-Required:
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MONOCLOUD_BACKEND_TENANT_DOMAIN` | required | Tenant origin, e.g. `https://acme.us.monocloud.com` — must equal the token's `iss` |
+| `MONOCLOUD_BACKEND_AUDIENCE` | required | API audience URI, e.g. `https://api.example.com` — must be in the token's `aud` |
+| `MONOCLOUD_BACKEND_CLIENT_ID` | — | Client used for introspection; required for opaque tokens (and for every token when `INTROSPECT_JWT_TOKENS=true`) |
+| `MONOCLOUD_BACKEND_CLIENT_SECRET` | — | Its secret; for `private_key_jwt`, the private JWK as a JSON string |
+| `MONOCLOUD_BACKEND_CLIENT_AUTH_METHOD` | `client_secret_post` | `client_secret_basic`, `client_secret_post`, `client_secret_jwt`, `private_key_jwt`, `tls_client_auth`, `self_signed_tls_client_auth`, `spiffe_jwt`, `spiffe_x509` |
+| `MONOCLOUD_BACKEND_TRUST_STORE_ID` | — | mTLS client auth only: use `mtls_additional_endpoint_aliases[id]` instead of `mtls_endpoint_aliases` |
+| `MONOCLOUD_BACKEND_INTROSPECT_JWT_TOKENS` | `false` | `true` introspects JWTs too (server-side revocation; one extra request per uncached token) |
+| `MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING` | `when_present` | `when_present`, `required` or `dangerously_ignore` — see [Certificate-bound tokens](#certificate-bound-mtls-tokens) |
+| `MONOCLOUD_BACKEND_GROUPS_CLAIM` | `groups` | Claim holding group memberships |
+| `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL` | `false` | `true` requires every listed group |
+| `MONOCLOUD_BACKEND_CLOCK_SKEW` | `0` | Seconds added to the local clock for `exp` / `nbf` checks |
+| `MONOCLOUD_BACKEND_CLOCK_TOLERANCE` | `60` | Leeway in seconds on `exp` / `nbf` |
+| `MONOCLOUD_BACKEND_JWKS_CACHE_DURATION` | `300` | Seconds the JWKS is cached |
+| `MONOCLOUD_BACKEND_METADATA_CACHE_DURATION` | `300` | Seconds the discovery document is cached |
+| `MONOCLOUD_BACKEND_INTROSPECTION_CACHE_DURATION` | `300` | Max seconds an introspection result stays in your `cache`; `0` disables caching |
+| `MONOCLOUD_BACKEND_RESPONSE_TIMEOUT` | `10000` | Milliseconds (min `1000`) before discovery / JWKS / introspection requests abort |
 
-| Variable                          | Purpose                                                    |
-| --------------------------------- | ---------------------------------------------------------- |
-| `MONOCLOUD_BACKEND_TENANT_DOMAIN` | MonoCloud tenant URL, e.g. `https://acme.us.monocloud.com` |
-| `MONOCLOUD_BACKEND_AUDIENCE`      | Expected audience claim, e.g. `https://api.example.com`    |
+Booleans accept only `true` / `false` (any case) and numbers are read with `parseInt`; anything else is silently ignored and the default applies. Building the client (which `protectApi()` does) throws `MonoCloudValidationError` for a missing or non-URI tenant domain / audience, an unknown auth method or binding mode (case-sensitive), a number below its minimum, an **empty** string variable (a blank `MONOCLOUD_BACKEND_CLIENT_ID=` line), or a non-JWK secret with `private_key_jwt`. Options passed to `new MonoCloudBackendNodeClient({...})` override env vars.
 
-Required only when validating **opaque tokens** (or when `MONOCLOUD_BACKEND_INTROSPECT_JWT_TOKENS=true`):
-
-| Variable                               | Purpose                                                                                                                                                |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `MONOCLOUD_BACKEND_CLIENT_ID`          | Client used to call the introspection endpoint                                                                                                         |
-| `MONOCLOUD_BACKEND_CLIENT_SECRET`      | Client secret. When `clientAuthMethod` is `private_key_jwt`, provide the private-key JWK as a JSON string (parsed and validated automatically).         |
-| `MONOCLOUD_BACKEND_CLIENT_AUTH_METHOD` | One of `client_secret_basic`, `client_secret_post` (default), `client_secret_jwt`, `private_key_jwt`, `tls_client_auth`, `self_signed_tls_client_auth`, `spiffe_jwt`, `spiffe_x509` |
-
-Required only when authenticating with a mutual-TLS client auth method (`tls_client_auth`, `self_signed_tls_client_auth`, `spiffe_x509`):
-
-| Variable                            | Purpose                                                                                                                                          |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `MONOCLOUD_BACKEND_TRUST_STORE_ID`  | Selects a specific trust store's endpoints from `mtls_additional_endpoint_aliases`. When omitted, the default `mtls_endpoint_aliases` are used.   |
-
-Optional tuning:
-
-| Variable                                    | Default | Purpose                                                    |
-| ------------------------------------------- | ------- | ---------------------------------------------------------- |
-| `MONOCLOUD_BACKEND_INTROSPECT_JWT_TOKENS`   | `false` | If `true`, skip local JWT validation and always introspect |
-| `MONOCLOUD_BACKEND_CLOCK_SKEW`              | `0`     | Allowed clock drift (seconds)                              |
-| `MONOCLOUD_BACKEND_CLOCK_TOLERANCE`         | `60`    | Extra tolerance on time-based claims (seconds)             |
-| `MONOCLOUD_BACKEND_GROUPS_CLAIM`            | `groups` | Claim name that carries group memberships                  |
-| `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL`        | `false` | If `true`, all listed groups must match                    |
-| `MONOCLOUD_BACKEND_JWKS_CACHE_DURATION`     | `300`   | Seconds to cache the JWKS                                  |
-| `MONOCLOUD_BACKEND_METADATA_CACHE_DURATION` | `300`   | Seconds to cache the OIDC discovery doc                    |
-| `MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING` | `when_present` | Certificate-binding mode: `when_present`, `required`, or `dangerously_ignore` |
-| `MONOCLOUD_BACKEND_INTROSPECTION_CACHE_DURATION` | `300`   | Seconds to cache introspection results (`0` disables caching) |
-| `MONOCLOUD_BACKEND_RESPONSE_TIMEOUT`        | `10000` | Milliseconds before discovery / JWKS / introspection requests are aborted (min `1000`) |
-
-## Basic wiring
+## Protect routes
 
 ```ts
+import "dotenv/config"; // load MONOCLOUD_BACKEND_* before protectApi() runs
 import express from "express";
-import {
-  protectApi,
-  type AuthenticatedExpressRequest,
-} from "@monocloud/backend-node/express";
+import { protectApi, type AuthenticatedExpressRequest } from "@monocloud/backend-node/express";
 
 const app = express();
+const protect = protectApi(); // once, at startup: builds the client from env (throws on bad config)
 
-// Reads MONOCLOUD_BACKEND_* env vars. Build it once and reuse.
-const protect = protectApi();
+app.get("/health", (_req, res) => { res.send("ok"); }); // no protect() → public
 
-// Bare protection — any valid token works
 app.get("/api/me", protect(), (req, res) => {
   const { claims } = req as AuthenticatedExpressRequest;
-  res.json({ sub: claims.sub });
+  res.json({ sub: claims.sub, scope: claims.scope });
 });
+app.post("/api/posts", protect({ scopes: ["posts:write"] }), (_req, res) => { res.status(201).end(); });
+app.delete("/api/posts/:id", protect({ groups: ["admin"] }), (_req, res) => { res.status(204).end(); });
 
-// Scope-gated
-app.post("/api/posts", protect({ scopes: ["posts:write"] }), (req, res) => {
-  res.status(201).end();
-});
-
-// Group-gated (uses MONOCLOUD_BACKEND_GROUPS_CLAIM or override per call)
-app.delete("/api/posts/:id", protect({ groups: ["admin"] }), (req, res) => {
-  res.status(204).end();
-});
+// Guard everything registered after this line: app.use(protect());
+// Or one router: adminRouter.use(protect({ groups: ["admin"] })); app.use("/admin", adminRouter);
 
 app.listen(3000);
 ```
 
-Two-call pattern: `protectApi()` builds a **factory** once (parses env, loads JWKS lazily); calling the factory with options returns the actual middleware. Build the factory outside the request hook, call the factory inline per route.
+`protectApi()` returns a factory; **call** it (`protect()`, `protect({...})`) to get the middleware. `app.use(protect)` passes the factory itself, which never calls `next()` — requests hang.
 
-## What `protect(options)` accepts
+`protect(options?)` accepts only `ProtectOptions`:
 
-`options` (all optional):
+- `scopes?: string[]` — **all** required, matched against the space-separated `scope` claim (no `scp` fallback; the claim name is fixed).
+- `groups?: string[]` — **any one** by default, all when `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL=true`. Read from the `groups` claim (`MONOCLOUD_BACKEND_GROUPS_CLAIM`); entries may be strings or `{ id, name }` objects (either field matches).
 
-```ts
-interface ProtectOptions {
-  scopes?: string[]; // require all listed scopes
-  groups?: string[]; // require group membership (any-of by default)
-}
-// Declared as Omit<ValidateAccessTokenOptions, 'clientCertificate'> —
-// certificate binding is now a CLIENT option, not a per-route one.
-```
+Empty arrays require nothing. There is no per-route certificate option: the binding mode is the client's `validateCertificateBinding` and the certificate comes from `certificateResolver`.
 
-- **scopes**: AND semantics — the token must carry every listed scope (string match against the `scope` claim).
-- **groups**: OR by default; flip with `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL=true` (or per-client `groupOptions.matchAll`). The claim name comes from `MONOCLOUD_BACKEND_GROUPS_CLAIM`.
-- **certificate binding is not a per-route option any more.** It moved to the client: `validateCertificateBinding?: CertificateBindingValidation` (env `MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING`), with three modes — `'when_present'` (**default**: validate whenever the token's `cnf` claim carries an `x5t#S256` thumbprint), `'required'` (always validate, rejecting tokens with no `cnf` claim), `'dangerously_ignore'` (never validate, even when the token carries a `cnf` claim). Because the default is `'when_present'`, certificate-bound tokens are now validated automatically — wire a `certificateResolver` (see "Advanced" below) or they fail with `Client certificate is not present`.
+## Responses
 
-## Client constructor options
+| Outcome | Status | JSON body | `WWW-Authenticate` |
+| --- | --- | --- | --- |
+| No token (`Authorization` absent or not exactly `Bearer <token>`, or `tokenResolver` returned a blank string) | 401 | `{"message":"unauthorized"}` | `Bearer` |
+| Token rejected — `MonoCloudTokenError` `invalid_token` / `inactive_token` (signature, `iss`, `aud`, `exp`, inactive, certificate binding…) | 401 | `{"message":"unauthorized"}` | `Bearer error="invalid_token"` |
+| Missing scope or group — `insufficient_scope` / `insufficient_groups` | 403 | `{"message":"forbidden"}` | `Bearer error="insufficient_scope"` |
+| `MonoCloudHttpError` with no status (network failure, `responseTimeout`), a 5xx or a 429 | 503 | `{"message":"service unavailable"}` | — |
+| `MonoCloudValidationError`, `MonoCloudOPError`, any other `MonoCloudHttpError` | 500 | `{"message":"internal server error"}` | — |
+| Any other thrown error (a resolver or cache throws, unsupported `alg`, no matching JWKS key) | 401 | `{"message":"unauthorized"}` | `Bearer error="invalid_token"` |
 
-`new MonoCloudBackendNodeClient(options)` accepts the backend-node option shape. Use this when you need a shared client, non-env configuration, or a custom token-claims cache:
+On success `req.claims` is set and `next()` runs; on failure the response is sent and `next` is never called. The cause is never exposed — see [Find the real error](references/troubleshooting.md#find-the-real-error).
 
-```ts
-interface MonoCloudBackendNodeClientOptions {
-  tenantDomain: string;
-  audience: string;
-  clientId?: string;
-  clientSecret?: string | Jwk;        // JSON-string JWK when clientAuthMethod is 'private_key_jwt'
-  clientAuthMethod?: ClientAuthMethod;
-  trustStoreId?: string;               // mTLS: pick trust store from mtls_additional_endpoint_aliases
-  metadataResolver?: () => IssuerMetadata | Promise<IssuerMetadata>; // supply issuer metadata out-of-band
-  jwksResolver?: () => Jwks | Promise<Jwks>;                         // supply JWKS out-of-band
-  groupOptions?: { groupsClaim?: string; matchAll?: boolean };
-  clockSkew?: number;
-  clockTolerance?: number;
-  jwksCacheDuration?: number;
-  metadataCacheDuration?: number;
-  introspectJwtTokens?: boolean;
-  validateCertificateBinding?: CertificateBindingValidation; // 'when_present' (default) | 'required' | 'dangerously_ignore'
-  introspectionCacheDuration?: number;  // seconds, default 300 — caps cached introspection results; 0 disables caching
-  responseTimeout?: number;             // ms, default 10000 (min 1000) — aborts discovery / JWKS / introspection requests
-  cache?: IIntrospectionCache;
-  fetcher?: typeof fetch;              // (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
-}
-```
-
-`cache?: IIntrospectionCache` is constructor-only; pass it in code to cache introspection results by raw token. An entry expires at `min(claims.exp, now() + introspectionCacheDuration)` — so no entry outlives `introspectionCacheDuration` (default `300` s) however long the token lives — and `introspectionCacheDuration: 0` disables caching entirely even when a `cache` is supplied. Only tokens validated via introspection are cached (opaque tokens, and JWTs when `introspectJwtTokens` is `true`); locally-validated JWTs are never cached. An `active: false` verdict is cached too and replayed as `MonoCloudTokenError('Token is not active. A cached introspection result reported active=false', 'inactive_token')` → 401 until it expires. The result is cached as soon as introspection returns it; the requested `scopes`, `groups` and the client-level certificate-binding check then run **per route** against those claims — cached or fresh — so a cached entry never bypasses per-route authorization.
-
-## Default responses
-
-- No `Authorization: Bearer <token>` header (and no custom `tokenResolver`): `401 { "message": "unauthorized" }` with a `WWW-Authenticate: Bearer` header.
-- Token validation fails (signature, audience, issuer, expiry, mismatched cnf, etc.): `401 { "message": "unauthorized" }` with `WWW-Authenticate: Bearer error="invalid_token"`.
-- Introspection reports the token inactive (`active: false`), or a still-fresh cached `active: false` verdict is replayed: `401 { "message": "unauthorized" }` — a `MonoCloudTokenError` with `code: 'inactive_token'` (mapped to 401, not 403).
-- A discovery / JWKS / introspection request exceeds `responseTimeout` (default `10000` ms): the request is aborted and a `MonoCloudHttpError` with **no** status is thrown → `503 { "message": "service unavailable" }`.
-- Token is valid but missing required scopes or groups: `403 { "message": "forbidden" }` with `WWW-Authenticate: Bearer error="insufficient_scope"`.
-- Authorization-server unreachable / 5xx / 429 (network or outage): `503 { "message": "service unavailable" }` (no `WWW-Authenticate`).
-- Introspection or config failure (`MonoCloudValidationError`, `MonoCloudOPError`, or a non-5xx `MonoCloudHttpError`): `500 { "message": "internal server error" }`.
-
-The middleware does not call `next(err)` — it sends the response directly. If you want custom error responses, wrap the middleware or implement your own using `MonoCloudBackendNodeClient.validateAccessToken()`.
-
-## Reading the validated claims
-
-After `protect()` runs successfully, `req.claims` is populated with `AccessTokenClaims`. Cast the request:
+`req.claims` is `AccessTokenClaims` (`iss`, `sub`, `aud`, `exp`, `iat`, `nbf?`, `scope?`, `client_id?`, `jti?`, plus custom claims via an index signature). Instead of casting to `AuthenticatedExpressRequest`, you can augment Express once:
 
 ```ts
-import type { AuthenticatedExpressRequest } from "@monocloud/backend-node/express";
+import type { AccessTokenClaims } from "@monocloud/backend-node/express";
 
-app.get("/api/me", protect(), (req, res) => {
-  const { claims } = req as AuthenticatedExpressRequest;
-  // claims.sub, claims.scope, claims.exp, claims.iat, etc.
-  res.json(claims);
-});
-```
-
-Alternatively, declare a global Express namespace augmentation if you don't want to cast per-route:
-
-```ts
-import type { AccessTokenClaims } from "@monocloud/backend-node";
 declare global {
   namespace Express {
-    interface Request {
-      claims?: AccessTokenClaims;
-    }
+    interface Request { claims?: AccessTokenClaims }
   }
 }
 ```
 
-## Advanced: shared client, custom resolvers, caching
+## Shared client, custom token source, caching
 
 ```ts
-import {
-  protectApi,
-  MonoCloudBackendNodeClient,
-  type AuthenticatedExpressRequest,
-  type IIntrospectionCache,
-} from "@monocloud/backend-node/express";
+import { protectApi, MonoCloudBackendNodeClient } from "@monocloud/backend-node/express";
 
-// Build a client explicitly when you need a cache or non-env config
 const client = new MonoCloudBackendNodeClient({
-  tenantDomain: "https://acme.us.monocloud.com",
-  audience: "https://api.example.com",
-  cache: redisCache, // your IIntrospectionCache implementation
-  introspectionCacheDuration: 300, // seconds; caps every cache entry (0 disables caching)
-  introspectJwtTokens: false,
-  responseTimeout: 10000, // ms; bounds discovery / JWKS / introspection requests
-  validateCertificateBinding: "required", // 'when_present' (default) | 'required' | 'dangerously_ignore'
+  cache: introspectionCache,       // optional IIntrospectionCache — object with exactly get/set/delete
+  introspectionCacheDuration: 120, // any option overrides its MONOCLOUD_BACKEND_* variable
 });
 
 const protect = protectApi(client, {
-  // Pull token from somewhere other than Authorization: Bearer
-  tokenResolver: async (req) => req.cookies.access_token,
-  // Required whenever certificate binding is validated — the SDK never reads the cert off the request itself
-  certificateResolver: async (req) => req.headers["x-client-cert"] as string,
-});
-
-app.get("/api/secure", protect(), (req, res) => {
-  res.json((req as AuthenticatedExpressRequest).claims);
+  // Default source: Authorization: Bearer <token>. Returning undefined falls back to it.
+  tokenResolver: async (req) => req.cookies?.access_token, // needs cookie-parser
 });
 ```
 
-`IIntrospectionCache` interface (implement for Redis, in-memory, etc.):
+- `protectApi(options)` without a client reads only `tokenResolver` / `certificateResolver`; client options passed there are ignored.
+- One client can back several factories and shares their discovery / JWKS caches.
+- Only introspection results are cached, keyed by the raw token, for at most `introspectionCacheDuration` seconds; scope, group and binding checks still run on every request. Contract, shape rules and an example: [`IIntrospectionCache`](references/api-surface.md#iintrospectioncache).
+
+## Certificate-bound (mTLS) tokens
+
+Tokens issued to mTLS clients carry `cnf: { "x5t#S256": "<base64url SHA-256 of the client certificate>" }`. The client option `validateCertificateBinding` (`MONOCLOUD_BACKEND_VALIDATE_CERTIFICATE_BINDING`) decides when the binding is checked:
+
+| Mode | Checked when |
+| --- | --- |
+| `when_present` (default) | the token's `cnf` contains `x5t#S256`; a `cnf` that is not a JSON object is also checked (and rejected) |
+| `required` | every request — tokens without `cnf` are rejected |
+| `dangerously_ignore` | never |
+
+A checked request needs the certificate from `certificateResolver` — PEM with or without the `BEGIN`/`END` lines, or base64 DER. The SDK never reads the TLS socket or headers itself; without a certificate the request gets 401 (`Client certificate is not present`).
 
 ```ts
-interface IIntrospectionCache {
-  get(token: string): Promise<AccessTokenClaims | null | undefined>;
-  set(
-    token: string,
-    claims: AccessTokenClaims,
-    expiresAt: number,
-  ): Promise<void>;
-  delete(token: string): Promise<void>;
-}
+import type { Request } from "express";
+import type { TLSSocket } from "node:tls";
+
+// TLS terminated by Node (https.createServer with requestCert: true)
+const fromSocket = async (req: Request) =>
+  (req.socket as TLSSocket).getPeerCertificate?.().raw?.toString("base64");
+
+// TLS terminated by a proxy: read only a header the proxy sets (and strips from incoming requests)
+const fromProxy = async (req: Request) => {
+  const cert = req.get("x-client-cert");
+  return cert ? decodeURIComponent(cert) : undefined; // proxies often URL-encode the PEM
+};
+
+const protect = protectApi(client, { certificateResolver: fromProxy });
 ```
 
-Caching is keyed on the raw token string. Entries are written with `expiresAt = min(claims.exp, now() + introspectionCacheDuration)` (or `now() + introspectionCacheDuration` when the claims carry no `exp`), so `introspectionCacheDuration` — default `300` s — is the hard ceiling on any entry's life. On read, the validity check is `cached.exp > now() + clockSkew - clockTolerance`, i.e. a cached entry stays valid until `claims.exp + clockTolerance - clockSkew < now()`. With the defaults (`clockSkew: 0`, `clockTolerance: 60`) the cache will keep returning a claim for up to ~60 seconds **past** the token's `exp`. Lower `clockTolerance` (e.g. to `0`) for strict expiry; raise it for higher hit rates at the cost of accepting slightly-expired tokens. A cached `active: false` entry short-circuits differently: while its own `exp` is still in the future it throws `inactive_token` immediately — no `clockSkew`/`clockTolerance` grace, no re-introspection.
+The resolver runs on every request; returning `undefined` is fine when no binding check applies.
 
-## JWT vs. introspection — how the SDK decides
+## Without Express (framework-agnostic)
 
-- If the token has three dot-separated parts (`xxx.yyy.zzz`) **and** `introspectJwtTokens` is false (default): the SDK validates the JWT locally using JWKS fetched from the tenant. No network call per request after the JWKS cache warms.
-- Otherwise (opaque tokens, or `introspectJwtTokens=true`): the SDK calls the OIDC introspection endpoint. Requires `clientId` + `clientSecret` (or another `clientAuthMethod`).
+For plain `node:http`, Koa, Hono and others, use the root export directly — the same engine `protectApi()` wraps:
 
-This means: **JWT tokens don't require client credentials.** Opaque tokens do. If you see `MonoCloudValidationError: Token introspection is not configured` when receiving opaque tokens, set the introspection env vars. A token requiring introspection now fails immediately when no `clientId` is configured, and the middleware surfaces this as **500**, not 401.
+```ts
+import { createServer } from "node:http";
+import {
+  MonoCloudBackendNodeClient, MonoCloudHttpError, MonoCloudOPError, MonoCloudTokenError, MonoCloudValidationError,
+} from "@monocloud/backend-node";
+
+const client = new MonoCloudBackendNodeClient(); // once; reads MONOCLOUD_BACKEND_*, options override env
+
+function statusFor(e: unknown): number { // the mapping protectApi() uses
+  if (e instanceof MonoCloudTokenError)
+    return e.code === "insufficient_scope" || e.code === "insufficient_groups" ? 403 : 401;
+  if (e instanceof MonoCloudHttpError) return e.status === undefined || e.status >= 500 || e.status === 429 ? 503 : 500;
+  if (e instanceof MonoCloudOPError || e instanceof MonoCloudValidationError) return 500;
+  return 401;
+}
+
+createServer(async (req, res) => {
+  const token = /^\s*Bearer\s+(\S+)\s*$/i.exec(req.headers.authorization ?? "")?.[1];
+  if (!token) {
+    res.writeHead(401, { "WWW-Authenticate": "Bearer" }).end();
+    return;
+  }
+  try {
+    const claims = await client.validateAccessToken(token, { scopes: ["read:data"] }); // also groups, clientCertificate
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ sub: claims.sub }));
+  } catch (e) {
+    const status = statusFor(e);
+    const challenge = status === 401 ? 'Bearer error="invalid_token"' : status === 403 ? 'Bearer error="insufficient_scope"' : undefined;
+    res.writeHead(status, challenge ? { "WWW-Authenticate": challenge } : {}).end();
+  }
+}).listen(3000);
+```
+
+Check for a missing token first: `validateAccessToken("")` throws `MonoCloudValidationError` (a 500 under this mapping). Don't answer every error with 401 — outages should be 503. `ValidateAccessTokenOptions` is `{ scopes?, groups?, clientCertificate? }`; the binding mode always comes from the client.
 
 ## Common pitfalls
 
-1. **Wrong import path.** `protectApi` must be imported from `@monocloud/backend-node/express`, not the root. The root only exports the framework-agnostic `MonoCloudBackendNodeClient` class.
-2. **Audience mismatch.** `MONOCLOUD_BACKEND_AUDIENCE` must exactly match the `aud` claim minted by your authorization server for this API. A trailing slash or http vs https difference will fail validation.
-3. **Building the factory per request.** `protectApi()` is meant to be called **once** at startup. Calling it inside a route handler creates a new client per request and re-fetches the JWKS each time.
-4. **Forgetting to install body-parser before protect.** `protect()` doesn't read the body, but if your route does, register body parsers normally. Order doesn't matter for the auth middleware.
-5. **Calling `next()` after the auth middleware sent a 401/403.** The middleware sends the response synchronously on failure and doesn't call `next`. If you wrap it, check `res.headersSent`.
-6. **Group claim missing.** If `groups` is set but the token doesn't carry the claim named by `MONOCLOUD_BACKEND_GROUPS_CLAIM` (or the default), the request is forbidden. Configure the claim in the MonoCloud dashboard or set `groupsClaim` explicitly.
-7. **Local JWT validation suddenly hitting the network.** If you set `MONOCLOUD_BACKEND_INTROSPECT_JWT_TOKENS=true`, every JWT request also calls introspection. Usually unwanted; only enable if you specifically need server-side revocation checks.
+1. **Root import** — `protectApi` and `AuthenticatedExpressRequest` exist only in `@monocloud/backend-node/express`.
+2. **Build the factory once, after env is loaded** — `protectApi()` constructs and validates the client immediately; per-request calls create new clients that refetch discovery and JWKS. Load env first (`import "dotenv/config"` as the first import, or `node --env-file=.env`).
+3. **Middleware order** — `app.use(protect())` guards only routes registered after it. Register `cors()` before it so `OPTIONS` preflight requests (which carry no token) aren't rejected.
+4. **Exact audience and issuer** — the token's `aud` must contain `MONOCLOUD_BACKEND_AUDIENCE` verbatim (trailing slash included); `iss` must equal the `https://` tenant domain (one trailing `/` is ignored).
+5. **Opaque tokens need introspection credentials** — without `MONOCLOUD_BACKEND_CLIENT_ID` they get 500 (`Token introspection is not configured`). JWTs need none.
+6. **Certificate-bound tokens are checked by default** — wire `certificateResolver` wherever clients send `cnf`-bound tokens.
+7. **Blank env lines crash startup** — e.g. `MONOCLOUD_BACKEND_CLIENT_SECRET=` throws `"clientSecret" is not allowed to be empty`; delete unused lines.
 
-## Onboarding checklist
+## References
 
-1. `npm install @monocloud/backend-node`.
-2. Add `MONOCLOUD_BACKEND_TENANT_DOMAIN` and `MONOCLOUD_BACKEND_AUDIENCE` to your env. If you'll accept opaque tokens, also add `MONOCLOUD_BACKEND_CLIENT_ID` and `MONOCLOUD_BACKEND_CLIENT_SECRET`.
-3. Register an **API** (audience) in the MonoCloud dashboard matching `MONOCLOUD_BACKEND_AUDIENCE`.
-4. Build the factory once: `const protect = protectApi();`
-5. Apply per-route: `app.get('/path', protect({ scopes: [...] }), handler);`
-6. Cast `req` to `AuthenticatedExpressRequest` inside handlers to read `claims`.
-
-## Related types and errors
-
-Re-exported from `@monocloud/auth-core` via `@monocloud/backend-node`:
-
-- `AccessTokenClaims`, `JwtClaims`, `Jwk`, `Jwks`, `IssuerMetadata`, `ClientAuthMethod`, `CertificateBindingValidation`, `MonoCloudTokenErrorCode`
-- `MonoCloudAuthBaseError`, `MonoCloudValidationError`, `MonoCloudOPError`, `MonoCloudHttpError`, `MonoCloudTokenError`
-
-A failed scope/group check throws `MonoCloudTokenError` with `code` `'insufficient_scope'` or `'insufficient_groups'` (messages `'Token is missing required scopes'` / `'Token is missing required groups'`) — the middleware maps those two **codes** (not the message strings) to 403. The full `MonoCloudTokenErrorCode` union is `'invalid_token' | 'inactive_token' | 'insufficient_scope' | 'insufficient_groups'`; anything other than the two above becomes 401, including the new `'inactive_token'` raised when introspection returns `active: false`. `MonoCloudValidationError` and `MonoCloudOPError` now map to **500**, and a `MonoCloudHttpError` with no status / a 5xx / a 429 maps to **503**.
-
-## Deeper reference
-
-- `references/api-surface.md` — every export from `@monocloud/backend-node/express`, full type signatures, env-var → option mapping, defaults.
-- `references/troubleshooting.md` — symptom → cause → fix index for the most common failure modes (audience mismatch, opaque-token introspection config, scope/group enforcement quirks, mTLS binding errors, JWKS thrash).
+- [references/api-surface.md](references/api-surface.md) — every export and signature, options ↔ env vars with validation rules, the `validateAccessToken` flow, the `IIntrospectionCache` contract, error classes.
+- [references/troubleshooting.md](references/troubleshooting.md) — error-message index and symptom → cause → fix.
+- [scripts/verify.js](scripts/verify.js) — `node scripts/verify.js [project-dir]` checks dependencies, `MONOCLOUD_BACKEND_*` values and common code mistakes.

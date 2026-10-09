@@ -1,48 +1,44 @@
 # MonoCloud concepts (quick map)
 
-This is a one-page mental model. The framework skills assume you have this context.
+One-page mental model the framework skills assume.
 
 ## Tenant URL
 
-Every MonoCloud account has a tenant URL like `https://<slug>.<region>.monocloud.com` (e.g. `https://acme.us.monocloud.com`). It is:
+Every tenant has a URL like `https://<slug>.<region>.monocloud.com` (e.g. `https://acme.us.monocloud.com`). It is the OIDC **issuer** for every auth SDK and the base of the Management API — both Management SDKs append `/api/` themselves, so always pass the bare URL.
 
-- The OIDC **issuer** (for `auth-nextjs` and `backend-node`).
-- The **base URL** for the Management API (`https://<tenant>/api/`). Both the JS and .NET Management SDKs append `/api/` themselves — pass the bare tenant URL.
-
-Most SDKs accept it under different names:
-
-| SDK                                           | Env var / config key                         |
-| --------------------------------------------- | -------------------------------------------- |
-| `@monocloud/auth-nextjs`                      | `MONOCLOUD_AUTH_TENANT_DOMAIN`               |
-| `@monocloud/backend-node` (express + fastify) | `MONOCLOUD_BACKEND_TENANT_DOMAIN`            |
-| `@monocloud/management`                       | `MONOCLOUD_MANAGEMENT_DOMAIN` or `init({ domain })` |
-| `MonoCloud.Management` (.NET)                 | `MonoCloud:Management:Domain` (appsettings)  |
+| SDK | Where the tenant URL goes |
+| --- | --- |
+| `@monocloud/auth-nextjs` | `MONOCLOUD_AUTH_TENANT_DOMAIN` (or the `tenantDomain` option) |
+| `@monocloud/auth-web-js` | `tenantDomain` constructor option |
+| `@monocloud/auth-react` | `tenantDomain` prop on `<MonoCloudAuthProvider>` |
+| `@monocloud/backend-node` (root, `/express`, `/fastify`) | `MONOCLOUD_BACKEND_TENANT_DOMAIN` (or the `tenantDomain` option) |
+| `MonoCloud.Authentication.Api` (ASP.NET Core) | `options.Authority` inside `AddMonoCloudAuthentication(options => …)` |
+| `@monocloud/management` | `MONOCLOUD_MANAGEMENT_DOMAIN` (or `init({ domain })`) |
+| `MonoCloud.Management` (.NET) | `MonoCloud:Management:Domain` configuration key |
 
 ## OIDC vs Management
 
-Two different surfaces; do not mix.
+Two separate surfaces — don't mix them.
 
-- **OIDC** — user-facing auth: sign-in, sign-up, sessions, tokens. Confidential clients (client id + secret) are configured per app in the MonoCloud dashboard. Used by `auth-nextjs` and `backend-node`.
-- **Management** — programmatic admin: list/create/update users, clients, groups, resources, etc. Authenticated by a **Management API key** generated in the dashboard. Used by `@monocloud/management` (JS) and `MonoCloud.Management` (.NET).
-
-A Management API key has **full tenant admin scope** — treat it like a root credential. It must never be shipped to a browser. Load from `process.env` / `IConfiguration` only.
+- **OIDC** — user-facing auth: sign-in, sessions, tokens, and access-token validation on APIs. Each app or API is registered in the MonoCloud dashboard. Used by `@monocloud/auth-nextjs`, `@monocloud/auth-web-js`, `@monocloud/auth-react`, `@monocloud/backend-node`, and `MonoCloud.Authentication.Api`.
+- **Management** — programmatic tenant admin (users, applications, groups, API resources, …), authenticated by a **Management API key** sent as `X-API-KEY`. Used by `@monocloud/management` and `MonoCloud.Management`. The key has full tenant-admin scope: keep it server-side, load it from `process.env` / `IConfiguration`, never ship it to a browser.
 
 ## Tokens
 
-- **JWT access tokens** — validated locally via JWKS. Default for `backend-node`.
-- **Opaque (reference) tokens** — must be introspected. `backend-node` does this automatically when it sees a non-JWT format, provided `MONOCLOUD_BACKEND_CLIENT_ID/SECRET` are set.
-- **ID tokens** — only consumed by `auth-nextjs`; never sent to APIs.
+- **ID tokens** — consumed by the sign-in SDKs (`auth-nextjs`, `auth-web-js`, `auth-react`) to build the user session. Never send them to APIs.
+- **JWT access tokens** — APIs validate them locally against the tenant's JWKS (`backend-node`, `MonoCloud.Authentication.Api`).
+- **Opaque (reference) access tokens** — must be introspected (RFC 7662) with the API's client credentials. Both API SDKs introspect any token that isn't a JWT, and every token when JWT introspection is switched on (`introspectJwtTokens` / `IntrospectJwtTokens`). Without credentials `backend-node` throws `Token introspection is not configured`.
 
 ## Client types
 
-| Client type        | Has a secret? | Used by                                                         |
-| ------------------ | ------------- | --------------------------------------------------------------- |
-| Regular web app    | yes           | `@monocloud/auth-nextjs`                                        |
-| SPA                | no            | (not covered yet — vanilla SPA skill not authored)              |
-| Native             | no            | (not covered yet)                                               |
-| Machine-to-machine | yes           | `@monocloud/backend-node` introspection, server-to-server flows |
-| Management API key | (just a key)  | `@monocloud/management`, `MonoCloud.Management`                 |
+| Client type | Secret? | Used by |
+| --- | --- | --- |
+| Web application (server-side) | yes | `@monocloud/auth-nextjs` |
+| Single-page application | usually no (public client + PKCE) | `@monocloud/auth-web-js`, `@monocloud/auth-react` |
+| Native / CLI / device | no | No dedicated skill — `@monocloud/auth-core`'s `MonoCloudOidcClient` (e.g. `deviceAuthorizationRequest()` / `deviceAuthorizationGrant()`) |
+| API credentials (introspection) | yes | `@monocloud/backend-node`, `MonoCloud.Authentication.Api` |
+| Management API key | key only | `@monocloud/management`, `MonoCloud.Management` |
 
-## Audiences and resources
+## Audiences
 
-For `backend-node`, `MONOCLOUD_BACKEND_AUDIENCE` must match the `aud` claim the access token was minted with — typically your API's URL (e.g. `https://api.example.com`). Mismatch causes 401s with `invalid_audience`. Configure the audience on the API resource in the MonoCloud dashboard.
+An API validates the token's `aud` claim against its configured audience — `MONOCLOUD_BACKEND_AUDIENCE` (`backend-node`) or `options.Audience` (`MonoCloud.Authentication.Api`) — typically the API's URL (e.g. `https://api.example.com`), set on the API resource in the dashboard. A mismatch is a 401 `invalid_token` (`backend-node`'s underlying error: `Invalid audience claim`).

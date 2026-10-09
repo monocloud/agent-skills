@@ -1,248 +1,208 @@
 # Protecting routes, pages, and APIs
 
-Full option shapes and behavior for every protection helper in `@monocloud/auth-nextjs`. All signatures verified against `packages/nextjs/src/`.
+Option shapes and default behavior of every protection helper in `@monocloud/auth-nextjs`. Server helpers come from the root import; `protectClientPage` from `/client`; `<Protected>` from `/components/client`.
 
-## Decision table
+## Default behavior
 
-| Surface | Helper | Default unauthenticated behavior | Default group-denied behavior |
-|---|---|---|---|
-| Middleware/proxy | `authMiddleware({ protectedRoutes, ... })` | Redirect to sign-in (or `401` for `/api/*`) | `403 "forbidden"` (or text `403` for non-`/api`) |
-| App Router page | `protectPage(Component, options?)` | Redirect to sign-in | Render `"Access Denied"` |
-| Pages Router page | `protectPage(options?)` (returns a `getServerSideProps`) | Redirect to sign-in | Render with `groupAccessDenied: true` prop |
-| App Router API | `protectApi(handler, options?)` | `401 {"message": "unauthorized"}` | `403 {"message": "forbidden"}` |
-| Pages Router API | `protectApi(handler, options?)` | `401 {"message": "unauthorized"}` | `403 {"message": "forbidden"}` |
-| Imperative (App Router) | `await protect(options?)` | `redirect()` to sign-in | `redirect()` to sign-in (group check failure is treated as not authorized) |
-| Client Component page | `protectClientPage(Component, options?)` | Window-level redirect to sign-in URL | Render `"Access Denied"` |
-| Inline client JSX | `<Protected fallback groups>` | Render `fallback` | Render `onGroupAccessDenied(user)` |
+| Helper | Not signed in | Signed in, not in `groups` |
+| --- | --- | --- |
+| `authMiddleware({ protectedRoutes })` | `307` to sign-in, `return_url` = path + query; paths starting with `/api` → `401 {"message":"unauthorized"}` | `/api…` → `403 {"message":"forbidden"}`; other paths → `403` plain-text `forbidden` |
+| `protectPage(Component, options?)` — App Router | `redirect()` to sign-in | renders the text `Access Denied` |
+| `protectPage(options?)` — Pages Router `getServerSideProps` | `{ redirect: { destination: <sign-in URL>, permanent: false } }` | `props: { groupAccessDenied: true }` (no `user`) |
+| `protectApi(handler, options?)` — App or Pages Router | `401 {"message":"unauthorized"}` | `403 {"message":"forbidden"}` |
+| `protect(options?)` — App Router only | `redirect()` to sign-in | `redirect()` to sign-in as well |
+| `protectClientPage(Component, options?)` | `window.location.assign(<sign-in>?return_url=<current URL>)` | renders `<div>Access Denied</div>` |
+| `<Protected groups? fallback?>` | renders `fallback` (default `null`) | renders `onGroupAccessDenied(user)` (default: nothing) |
 
-All `groups` checks honor `groupsClaim` (resolution order: per-call `groupsClaim` arg → constructor `MonoCloudOptions.groupsClaim` → env `MONOCLOUD_AUTH_GROUPS_CLAIM` → `"groups"`). `matchAll` (default `false` — membership in **any** listed group is enough) is honored by `protect` / `protectApi` / `protectPage` / `protectClientPage` / `isUserInGroup` / `<Protected matchAllGroups>`, but **not** by `authMiddleware()`: the middleware accepts a `matchAll` option yet never forwards it to the group check, so middleware group matching is always any-of. Enforce all-of membership inside the page/route with `protect({ groups, matchAll: true })` instead.
+The two client helpers render `null` while `useAuth()` loads and only control rendering — anything passed to them still reaches the browser. Gate data with the server helpers.
 
-## `authMiddleware(options?)`
+## Groups
+
+- Groups come from `session.user[groupsClaim]`; entries may be strings or `{ id, name }` objects, and a required group matches an entry's string, `id` or `name`. An empty `groups` array imposes no requirement.
+- Any-of by default; `matchAll: true` requires every group (`<Protected matchAllGroups>`). `authMiddleware()` accepts `matchAll` but does not apply it — middleware group checks are always any-of, so enforce all-of with `protect({ groups, matchAll: true })` or `protectPage(…, { groups, matchAll: true })`.
+- Claim name — server helpers: per-call `groupsClaim` → `MonoCloudOptions.groupsClaim` → `MONOCLOUD_AUTH_GROUPS_CLAIM` → `groups`. Client helpers: per-call `groupsClaim` → `NEXT_PUBLIC_MONOCLOUD_AUTH_GROUPS_CLAIM` → `groups`.
+
+## `authMiddleware()` options
 
 ```ts
-import type { NextRequest, NextFetchEvent, NextResponse } from 'next/server';
-
 interface MonoCloudMiddlewareOptions {
-  protectedRoutes?:
-    | (string | RegExp | { routes: (string | RegExp)[]; groups: string[] })[]
-    | ((req: NextRequest) => boolean | Promise<boolean>);
+  protectedRoutes?: ProtectedRouteMatcher[] | ((req: NextRequest) => boolean | Promise<boolean>);
   groupsClaim?: string;
-  matchAll?: boolean;              // accepted by the type, but not applied to the middleware group check
-  onAccessDenied?: (req: NextRequest, evt: NextFetchEvent) =>
-    | NextResponse | Response | null | undefined | void
-    | Promise<NextResponse | Response | null | undefined | void>;
-  onGroupAccessDenied?: (req: NextRequest, evt: NextFetchEvent, user: MonoCloudUser) =>
-    | NextResponse | Response | null | undefined | void
-    | Promise<NextResponse | Response | null | undefined | void>;
-  onError?: (req: NextRequest, evt: NextFetchEvent, error: Error) =>
-    NextResponse | void | Promise<NextResponse | void>;
+  matchAll?: boolean; // accepted but not applied (see Groups)
+  onAccessDenied?: (req: NextRequest, evt: NextFetchEvent) => NextMiddlewareResult | Promise<NextMiddlewareResult>;
+  onGroupAccessDenied?: (req: NextRequest, evt: NextFetchEvent, user: MonoCloudUser) => NextMiddlewareResult | Promise<NextMiddlewareResult>;
+  onError?: (req: NextRequest, evt: NextFetchEvent, error: Error) => NextResponse | void | Promise<NextResponse | void>;
+}
+type ProtectedRouteMatcher = string | RegExp | { routes: (string | RegExp)[]; groups: string[] };
+type NextMiddlewareResult = NextResponse | Response | null | undefined | void;
+```
+
+Request flow:
+
+1. A request carrying an `x-middleware-subrequest` header gets `403 {"message":"forbidden"}`.
+2. A path equal to a configured auth route is served (sign-in, callback, userinfo, sign-out, back-channel logout) — never blocked, even by `protectedRoutes: ['.*']`. Failures there go to `onError`.
+3. `protectedRoutes` decides whether the path is protected: omitted → every matched path; `[]` → none; array entries are tested in order with `new RegExp(entry).test(pathname)` (unanchored — use `^…$`) and evaluation stops at the first match; if that is a `{ routes, groups }` entry, its groups are required.
+4. Session check, then group check, with the defaults above. A response returned from `onAccessDenied` / `onGroupAccessDenied` is used (cookies the SDK set are merged in); returning nothing lets the request continue. `onGroupAccessDenied` never falls back to `onAccessDenied`.
+
+Composing with your own middleware — call it with `(req, evt)` and return its result:
+
+```ts
+// proxy.ts / middleware.ts
+import { authMiddleware } from "@monocloud/auth-nextjs";
+import { NextResponse, type NextFetchEvent, type NextRequest } from "next/server";
+
+export default async function proxy(req: NextRequest, evt: NextFetchEvent) {
+  if (req.nextUrl.pathname.startsWith("/public")) return NextResponse.next();
+  return authMiddleware(req, evt); // still serves /api/auth/* and protects the rest
 }
 ```
 
-Behavior:
-
-- If `protectedRoutes` is **omitted**, every route matched by `config.matcher` requires authentication.
-- If `protectedRoutes` is `[]`, no routes are protected (but auth routes still work).
-- Matchers in the array are evaluated with `new RegExp(...)`, so plain strings act as patterns. Use `^` / `$` if you need anchoring (e.g. `'^/admin$'`).
-- Group object form (`{ routes, groups }`): the first matching entry sets the required groups for that request. Matching is **any-of** — the middleware's `matchAll` option is not applied to this check.
-- For unauthenticated `/api/*` paths, the default response is `401 JSON`. For other paths, the user is redirected to sign-in with `return_url` set to the original path.
-- Auth routes (sign-in, callback, userinfo, sign-out **and** back-channel logout) are dispatched *before* `protectedRoutes` is evaluated, so they are never blocked — even with `protectedRoutes: ['.*']`.
-- `onError` also covers failures in those auth routes, including back-channel logout.
+`authMiddleware(req, evt)` uses default options; with options, call `authMiddleware({ protectedRoutes })(req, evt)`. Don't route only some paths to it unless `/api/auth/*` is among them — otherwise sign-in breaks.
 
 ## `protectPage` — App Router
 
 ```ts
 function protectPage(
-  component: (props: {
-    user: MonoCloudUser;
-    params?: Record<string, string | string[]>;
-    searchParams?: Record<string, string | string[] | undefined>;
-  }) => JSX.Element | Promise<JSX.Element>,
+  component: (props: { user: MonoCloudUser; params?; searchParams? }) => JSX.Element | Promise<JSX.Element>,
   options?: ProtectAppPageOptions,
 ): AppRouterPageHandler;
 
 interface ProtectAppPageOptions {
-  returnUrl?: string;                   // defaults to current URL
-  groups?: string[];                    // required groups (any-of by default)
+  returnUrl?: string;        // default: the `x-monocloud-path` request header, else '/'
+  groups?: string[];
   groupsClaim?: string;
-  matchAll?: boolean;                   // require all groups
-  authParams?: ExtraAuthParams;         // applied to the sign-in URL when redirecting
-  onAccessDenied?: (props) => JSX.Element | Promise<JSX.Element>;
-  onGroupAccessDenied?: (props & { user }) => JSX.Element | Promise<JSX.Element>;
+  matchAll?: boolean;
+  authParams?: ExtraAuthParams;
+  onAccessDenied?: (props: { params?; searchParams? }) => JSX.Element | Promise<JSX.Element>;
+  onGroupAccessDenied?: (props: { user: MonoCloudUser; params?; searchParams? }) => JSX.Element | Promise<JSX.Element>;
 }
 ```
 
-The protected component receives `user: MonoCloudUser` in props, plus whatever `params`/`searchParams` Next.js passes.
+The wrapped component receives Next's page props plus `user`.
+
+`authMiddleware()` sets `x-monocloud-path` on its *response*, not on the forwarded request, so `headers()` normally can't see it and the `returnUrl` default resolves to `/` (same for `protect()`). Pass `returnUrl` explicitly to send users back to the page they asked for.
 
 ## `protectPage` — Pages Router
 
-When called **without** a function argument, returns a `getServerSideProps` wrapper.
+Called without a component it returns a `getServerSideProps`:
 
 ```ts
-function protectPage<P, Q>(
-  options?: ProtectPagePageOptions<P, Q>,
-): (ctx: GetServerSidePropsContext<Q>) =>
-    Promise<GetServerSidePropsResult<P & { user: MonoCloudUser; accessDenied?: boolean }>>;
+function protectPage<P, Q>(options?: ProtectPagePageOptions<P, Q>):
+  (ctx: GetServerSidePropsContext<Q>) => Promise<GetServerSidePropsResult<P & { user: MonoCloudUser; accessDenied?: boolean }>>;
 
 interface ProtectPagePageOptions<P, Q> {
-  returnUrl?: string;
+  returnUrl?: string;        // default: ctx.resolvedUrl
   groups?: string[];
   groupsClaim?: string;
   matchAll?: boolean;
   authParams?: ExtraAuthParams;
-  getServerSideProps?: GetServerSideProps<P, Q>; // runs after auth/group checks
-  onAccessDenied?: (ctx) => GetServerSidePropsResult<P> | Promise<...>;
-  onGroupAccessDenied?: (ctx & { user }) => GetServerSidePropsResult<P> | Promise<...>;
+  getServerSideProps?: GetServerSideProps<P, Q>; // runs after the checks; its props are merged over { user }
+  onAccessDenied?: (ctx: GetServerSidePropsContext<Q>) => GetServerSidePropsResult<P> | Promise<GetServerSidePropsResult<P>>;
+  onGroupAccessDenied?: (ctx: GetServerSidePropsContext<Q> & { user: MonoCloudUser }) => GetServerSidePropsResult<P> | Promise<GetServerSidePropsResult<P>>;
 }
 ```
 
-When the group check fails and `onGroupAccessDenied` is not provided, the page still renders with `props: { groupAccessDenied: true }` so you can render an inline access-denied UI inside the page component.
+On a group failure without `onGroupAccessDenied`, the page renders with `groupAccessDenied: true` (the return type names the flag `accessDenied`, but the runtime prop is `groupAccessDenied`).
 
-## `protectApi` — App Router
+## `protectApi`
+
+The overload is chosen from the request at runtime (Web `Request` → App Router).
 
 ```ts
+// App Router route handler
 function protectApi(
-  handler: (req: NextRequest | Request, ctx: { params: ... }) =>
-    Response | NextResponse | Promise<Response | NextResponse>,
+  handler: (req: NextRequest | Request, ctx: AppRouterContext) => Response | Promise<Response>,
   options?: ProtectApiAppOptions,
-): typeof handler;
-
+): AppRouterApiHandlerFn;
 interface ProtectApiAppOptions {
-  groups?: string[];
-  groupsClaim?: string;
-  matchAll?: boolean;
-  onAccessDenied?: (req, ctx) => Response | Promise<Response>;
-  onGroupAccessDenied?: (req, ctx, user) => Response | Promise<Response>;
+  groups?: string[]; groupsClaim?: string; matchAll?: boolean;
+  onAccessDenied?: (req: NextRequest, ctx: AppRouterContext) => Response | Promise<Response>;
+  onGroupAccessDenied?: (req: NextRequest, ctx: AppRouterContext, user: MonoCloudUser) => Response | Promise<Response>;
 }
-```
 
-Default denial: `NextResponse.json({ message: 'unauthorized' }, { status: 401 })` / `{ message: 'forbidden' }, 403`.
-
-## `protectApi` — Pages Router
-
-Overload selected by handler shape (`NextApiHandler` vs App Router handler).
-
-```ts
-function protectApi(
-  handler: (req: NextApiRequest, res: NextApiResponse) => unknown | Promise<unknown>,
-  options?: ProtectApiPageOptions,
-): NextApiHandler;
-
+// Pages Router API route
+function protectApi(handler: NextApiHandler, options?: ProtectApiPageOptions): NextApiHandler;
 interface ProtectApiPageOptions {
-  groups?: string[];
-  groupsClaim?: string;
-  matchAll?: boolean;
-  onAccessDenied?: (req: NextApiRequest, res: NextApiResponse) => unknown | Promise<unknown>;
-  onGroupAccessDenied?: (req, res, user) => unknown | Promise<unknown>;
+  groups?: string[]; groupsClaim?: string; matchAll?: boolean;
+  onAccessDenied?: (req: NextApiRequest, res: NextApiResponse) => unknown; // must send the response via `res`
+  onGroupAccessDenied?: (req: NextApiRequest, res: NextApiResponse, user: MonoCloudUser) => unknown;
 }
 ```
 
-The on-denied handlers must **send** a response via `res` themselves; returning a value does not end the request.
+In the App Router, cookies refreshed while reading the session are merged into the handler's response.
 
-## `protect(options?)` — App Router only
+## `protect()` — App Router only
 
 ```ts
 function protect(options?: ProtectOptions): Promise<void>;
-
 interface ProtectOptions {
-  returnUrl?: string;
-  groups?: string[];
-  groupsClaim?: string;
-  matchAll?: boolean;
+  returnUrl?: string;        // default: the `x-monocloud-path` request header, else '/'
+  groups?: string[]; groupsClaim?: string; matchAll?: boolean;
   authParams?: ExtraAuthParams;
 }
 ```
 
-- Returns silently if the user is authenticated and (when `groups` is set) belongs to one of them.
-- Otherwise calls `next/navigation.redirect()` to the sign-in URL — execution stops.
-- Throws "can only be used in App Router server environments" if called outside RSC/route handlers/server actions.
+- Resolves when the user is signed in (and in `groups`); otherwise calls `redirect()` to sign-in — pass `returnUrl` explicitly (see [`protectPage`](#protectpage--app-router)) — for group failures too. To answer `403` instead, check `isUserInGroup()` yourself.
+- Outside RSC / Server Actions / Route Handlers it throws `protect() can only be used in App Router server environments (RSC, route handlers, or server actions)`. Any error raised while reading the session surfaces with the same message.
 
-## `protectClientPage(Component, options?)` — Client Component HOC
+## `protectClientPage()` — Client Component HOC
 
 ```ts
 function protectClientPage<P extends object>(
   Component: React.ComponentType<P & { user: MonoCloudUser }>,
-  options?: ProtectClientPageOptions,
+  options?: ProtectClientPageOptions, // returnUrl?, groups?, groupsClaim?, matchAll?, authParams?, onAccessDenied?, onGroupAccessDenied?, onError?
 ): React.FC<P>;
-
-interface ProtectClientPageOptions {
-  returnUrl?: string;
-  groups?: string[];
-  groupsClaim?: string;
-  matchAll?: boolean;
-  authParams?: ExtraAuthParams;
-  onAccessDenied?: () => React.ReactNode;
-  onGroupAccessDenied?: (user: MonoCloudUser) => React.ReactNode;
-  onError?: (error: Error) => React.ReactNode;
-}
 ```
 
-Without `onAccessDenied`, the wrapped component performs `window.location.assign(<signin-url>?return_url=...)` when no user is loaded.
+- Signed out without `onAccessDenied`: redirects the browser to the sign-in route with `return_url` = `returnUrl` or the current URL (the current query string is carried along).
+- A `useAuth()` error renders `onError(error)`, or is thrown if `onError` is missing.
 
 ## `<Protected>` — inline client gating
 
 ```tsx
-import { Protected } from '@monocloud/auth-nextjs/components/client';
+"use client";
+import { Protected } from "@monocloud/auth-nextjs/components/client";
 
-interface ProtectedComponentProps {
-  children: React.ReactNode;
-  groups?: string[];
-  groupsClaim?: string;
-  matchAllGroups?: boolean;            // note the name — not `matchAll`
-  fallback?: React.ReactNode;          // rendered when unauthenticated
-  onGroupAccessDenied?: (user) => React.ReactNode;
-}
+<Protected groups={["admin", "billing"]} matchAllGroups fallback={<p>Sign in to continue</p>}
+  onGroupAccessDenied={(user) => <p>{user.email} lacks access</p>}>
+  <BillingSettings />
+</Protected>;
 ```
 
-Renders `null` while loading. Does **not** prevent the browser from receiving the children — for true server-side gating, use `protectPage`/`protect`.
+Props: `children`, `groups?`, `groupsClaim?`, `matchAllGroups?` (not `matchAll`), `fallback?` (also shown on a `useAuth()` error), `onGroupAccessDenied?`.
 
-## `ExtraAuthParams` (used by every `authParams` option)
+## Which helpers forward which `authParams`
 
-Subset of OIDC authorization parameters supported by client-side helpers and protection HOCs:
+Everything is sent as query parameters on the sign-in route and honored only while `allowQueryParamOverrides` is `true` (default). `scopes`/`resource` replace the configured defaults for that sign-in — keep `openid` in `scopes`.
 
-```ts
-interface ExtraAuthParams {
-  scopes?: string;
-  resource?: string;
-  audience?: string;
-  idTokenHint?: string;
-  prompt?: 'none' | 'login' | 'consent' | 'select_account' | 'create' | (string & {});
-  display?: 'page' | 'popup' | 'touch' | 'wap' | (string & {});
-  uiLocales?: string;
-  acrValues?: string[];
-  authenticatorHint?: string;
-  maxAge?: number;
-  loginHint?: string;
-}
-```
+| Param | `<SignIn>` | `<SignUp>` | `protect`, `protectPage`, `redirectToSignIn`, `protectClientPage`, `<RedirectToSignIn>` |
+| --- | --- | --- | --- |
+| `scopes`, `resource`, `acrValues`, `display`, `uiLocales`, `maxAge` | ✓ | ✓ | ✓ |
+| `prompt`, `loginHint`, `authenticatorHint` | ✓ | — (`prompt=create`) | ✓ |
+| `audience`, `idTokenHint` | ✓ | ✓ | ✗ dropped |
 
-## Server-action protection — patterns, not a dedicated helper
+## Server Actions
 
-There is no `protectServerAction` HOC. Three idiomatic patterns:
+There is no dedicated HOC; use the helpers inside the action:
 
 ```ts
-'use server';
-import { protect, getSession, redirectToSignIn, isUserInGroup } from '@monocloud/auth-nextjs';
+"use server";
+import { protect, getSession, isUserInGroup, redirectToSignIn } from "@monocloud/auth-nextjs";
 
-// 1) Hardest, simplest — redirect if not signed in
 export async function deletePost(id: string) {
-  await protect({ groups: ['admin'] });
-  // ... your logic
+  await protect({ groups: ["admin"] }); // redirects unless signed in and in the group
+  // …
 }
 
-// 2) Soft — return a typed error instead of redirecting
 export async function publishPost(id: string) {
-  const session = await getSession();
-  if (!session) return { ok: false, reason: 'unauthenticated' } as const;
-  if (!(await isUserInGroup(['editor']))) return { ok: false, reason: 'forbidden' } as const;
-  // ... your logic
+  if (!(await getSession())) return { ok: false, reason: "unauthenticated" } as const;
+  if (!(await isUserInGroup(["editor"]))) return { ok: false, reason: "forbidden" } as const;
+  // …
   return { ok: true } as const;
 }
 
-// 3) Explicit redirect with custom return URL
 export async function startCheckout() {
-  const session = await getSession();
-  if (!session) await redirectToSignIn({ returnUrl: '/checkout' });
-  // ... your logic
+  if (!(await getSession())) await redirectToSignIn({ returnUrl: "/checkout" });
+  // …
 }
 ```

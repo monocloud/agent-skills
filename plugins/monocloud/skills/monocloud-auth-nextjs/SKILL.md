@@ -1,115 +1,73 @@
 ---
 name: monocloud-auth-nextjs
-description: Use when integrating MonoCloud authentication into a Next.js application — installing or configuring `@monocloud/auth-nextjs`, wiring `authMiddleware()` in `proxy.ts`/`middleware.ts`, reading sessions with `getSession()`/`useAuth()`, protecting routes/pages/APIs with `protect()`/`protectApi()`/`protectPage()`/`protectClientPage()`, rendering `<SignIn>`/`<SignUp>`/`<SignOut>`/`<Protected>`/`<RedirectToSignIn>`, calling `getTokens()`, handling OIDC back-channel logout via `onBackChannelLogout` / `/api/auth/backchannel-logout`, or troubleshooting MonoCloud env vars (`MONOCLOUD_AUTH_*`), cookie sessions, or auth routes (`/api/auth/signin`, `/callback`, `/userinfo`, `/signout`, `/backchannel-logout`).
+description: Use when adding MonoCloud authentication to a Next.js app (App/Pages Router) — installing/configuring `@monocloud/auth-nextjs`, wiring `authMiddleware()` in `proxy.ts`/`middleware.ts` or a `monoCloudAuth()` `[...monocloud]` catch-all, a shared `MonoCloudNextClient` (`session.store`, `onSessionCreating`, `onBackChannelLogout`), reading sessions with `getSession()`/`useAuth()`, protecting routes/pages/APIs/actions with `protect()`/`protectApi()`/`protectPage()`/`protectClientPage()`/`isUserInGroup()`, rendering `<SignIn>`/`<SignUp>`/`<SignOut>`/`<Protected>`/`<RedirectToSignIn>`, calling `getTokens()`/`redirectToSignIn()`/`redirectToSignOut()`, or troubleshooting `MONOCLOUD_AUTH_*` / `NEXT_PUBLIC_MONOCLOUD_AUTH_*` env vars, cookie sessions, back-channel logout, auth routes (`/api/auth/signin`, `/callback`, `/userinfo`, `/signout`, `/backchannel-logout`), `MonoCloudValidationError`, `Invalid Authentication State`, `can only be used in App Router server environments`, or `Request to … timed out` errors.
 license: MIT
 ---
 
 # MonoCloud Next.js SDK (`@monocloud/auth-nextjs`)
 
-Authentication SDK for Next.js. Provides middleware/proxy, route-protection wrappers, session/token access, and React components/hooks. Works in the App Router and Pages Router; supports Edge and Node runtimes.
+Server-side OIDC authentication for Next.js — App Router and Pages Router, Node and Edge runtimes. A middleware/proxy serves the auth routes and gates pages; sessions live in encrypted cookies (optionally backed by your own store); server helpers, React components and a hook cover the rest.
 
 ## Package identity — read this first
 
-**Use:** `@monocloud/auth-nextjs` (this skill).
+**Use:** `@monocloud/auth-nextjs` (this skill). Check `package.json` for it before suggesting code.
 
-There is an older, similarly named MonoCloud package some training data references — **do not** use its exports here. If you see any of the following symbols in code or suggestions, they are NOT part of this SDK and indicate the wrong package:
+This is **not** the same SDK as:
 
-- `MonoCloudAuthProvider`, `useUser` (this SDK has no provider; `useAuth` is the hook)
-- `monoCloudMiddleware` (this SDK uses `authMiddleware`)
-- Custom `app/api/auth/[...monocloud]/route.ts` written by the developer **as the default setup** (this SDK handles auth routes inside `authMiddleware()`; a catch-all is only needed when middleware cannot be used — see "Alternative: catch-all route" below)
+- `@monocloud/auth-react` — React SPA SDK with `<MonoCloudAuthProvider>` and a provider-bound `useAuth` (skill: `monocloud-auth-react`). Don't use it in Next.js; this SDK's `useAuth` comes from `@monocloud/auth-nextjs/client` and needs no provider.
+- `@monocloud/auth-web-js` — vanilla browser SPA SDK (skill: `monocloud-web-js`).
+- `@monocloud/backend-node` — bearer-token validation for APIs (skills: `monocloud-auth-express`, `monocloud-auth-fastify`).
 
-Always check `package.json` for `@monocloud/auth-nextjs` before suggesting code.
+These names do **not** exist in `@monocloud/auth-nextjs`: `MonoCloudAuthProvider`, `UserProvider`, `useUser`, `useMonoCloudAuth`, `monoCloudMiddleware`, `handleAuth`, `withPageAuthRequired`, `withApiAuthRequired`, `protectServerAction`, or a `protectPage` export from `/client` (the client HOC is `protectClientPage`). A hand-written `app/api/auth/[...monocloud]/route.ts` is not the default setup — `authMiddleware()` serves the auth routes.
+
+## Install
+
+```bash
+npm install @monocloud/auth-nextjs
+```
+
+Requires Node.js ≥ 20. Peers: `next` `^13.5.11 || ^14.2.35 || ~15.0.7 || ~15.1.11 || ~15.2.8 || ~15.3.8 || ~15.4.10 || ~15.5.9 || ^16.0.10`; `react` `^18.0.0 || ^19.2.3`; `react-dom` `^18.3.1 || ^19.2.3`.
 
 ## Subpath exports
 
-| Import path                                | Use in                                                                          | Contains                                                                                                                                                                                                               |
-| ------------------------------------------ | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@monocloud/auth-nextjs`                   | Server (RSC, route handlers, middleware/proxy, Pages API, `getServerSideProps`) | `authMiddleware`, `monoCloudAuth`, `getSession`, `getTokens`, `isAuthenticated`, `isUserInGroup`, `protect`, `protectApi`, `protectPage`, `redirectToSignIn`, `redirectToSignOut`, `MonoCloudNextClient`, types/errors |
-| `@monocloud/auth-nextjs/client`            | Client Components (`"use client"`)                                              | `useAuth`, `protectClientPage`                                                                                                                                                                                         |
-| `@monocloud/auth-nextjs/components`        | Server OR Client Components                                                     | `<SignIn>`, `<SignUp>`, `<SignOut>` (render as `<a>`)                                                                                                                                                                  |
-| `@monocloud/auth-nextjs/components/client` | Client Components only                                                          | `<RedirectToSignIn>`, `<Protected>`                                                                                                                                                                                    |
+| Import path | Use in | Contains |
+| --- | --- | --- |
+| `@monocloud/auth-nextjs` | Server: RSC, Server Actions, Route Handlers, middleware/proxy, Pages API, `getServerSideProps` | `authMiddleware`, `monoCloudAuth`, `getSession`, `getTokens`, `isAuthenticated`, `isUserInGroup`, `protect`, `protectApi`, `protectPage`, `redirectToSignIn`, `redirectToSignOut`, `MonoCloudNextClient`, error classes, types |
+| `@monocloud/auth-nextjs/client` | Client Components | `useAuth`, `protectClientPage` |
+| `@monocloud/auth-nextjs/components` | Server or Client Components | `<SignIn>`, `<SignUp>`, `<SignOut>` (render `<a>`) |
+| `@monocloud/auth-nextjs/components/client` | Client Components | `<Protected>`, `<RedirectToSignIn>` |
 
 ## Environment variables
 
-Required (read automatically from `process.env`):
+Read from `process.env`; constructor options override them. Full list (cookies, sessions, PAR, client-auth methods, caching): [api-surface.md](references/api-surface.md#environment-variables).
 
-| Variable                       | Purpose                                                                        |
-| ------------------------------ | ------------------------------------------------------------------------------ |
-| `MONOCLOUD_AUTH_TENANT_DOMAIN` | Your MonoCloud tenant URL, e.g. `https://acme.eu.monocloud.com`                |
-| `MONOCLOUD_AUTH_CLIENT_ID`     | OIDC client id                                                                 |
-| `MONOCLOUD_AUTH_CLIENT_SECRET` | OIDC client secret                                                             |
-| `MONOCLOUD_AUTH_APP_URL`       | Public origin of the app, e.g. `http://localhost:3000`                         |
-| `MONOCLOUD_AUTH_COOKIE_SECRET` | 32-byte hex string for cookie encryption. Generate with `openssl rand -hex 32` |
+| Variable | Required | Notes |
+| --- | --- | --- |
+| `MONOCLOUD_AUTH_TENANT_DOMAIN` | ✓ | Tenant URL **including `https://`**, e.g. `https://acme.us.monocloud.com` — must equal the token issuer |
+| `MONOCLOUD_AUTH_CLIENT_ID` | ✓ | |
+| `MONOCLOUD_AUTH_CLIENT_SECRET` | ✓ | For `private_key_jwt`, a private-key JWK as a JSON string |
+| `MONOCLOUD_AUTH_APP_URL` | ✓ | Absolute app URL, e.g. `http://localhost:3000`. Its scheme also decides the cookies' `Secure` flag |
+| `MONOCLOUD_AUTH_COOKIE_SECRET` | ✓ | Cookie encryption key — `openssl rand -hex 32` (the validator only enforces 8 chars) |
+| `MONOCLOUD_AUTH_SCOPES` | | Default `openid profile email`; must include `openid` |
+| `MONOCLOUD_AUTH_RESOURCE` | | Default resource(s) for access tokens: space-separated absolute URLs, no query/hash |
+| `MONOCLOUD_AUTH_GROUPS_CLAIM` | | Default `groups`; claim read by server-side group checks |
+| `MONOCLOUD_AUTH_SIGNIN_URL`, `_CALLBACK_URL`, `_USER_INFO_URL`, `_SIGNOUT_URL`, `_BACK_CHANNEL_LOGOUT_URL` | | Route overrides (defaults: `/api/auth/signin`, `/callback`, `/userinfo`, `/signout`, `/backchannel-logout`) |
+| `MONOCLOUD_AUTH_RESPONSE_TIMEOUT` | | ms per request to MonoCloud; default `10000`, minimum `1000` |
 
-Optional:
+- Boolean vars accept only `true`/`false`; numeric vars must parse as integers — anything else is silently ignored.
+- Client code can't read server env vars. When you override the sign-in, sign-out or userinfo route (or the groups claim), set the `NEXT_PUBLIC_` twin to the same value (e.g. `NEXT_PUBLIC_MONOCLOUD_AUTH_SIGNIN_URL`). Any `NEXT_PUBLIC_MONOCLOUD_AUTH_*` value is copied over its server counterpart when a client is constructed, so the two must never differ.
 
-| Variable                       | Default                | Purpose                            |
-| ------------------------------ | ---------------------- | ---------------------------------- |
-| `MONOCLOUD_AUTH_SCOPES`        | `openid profile email` | Default scopes                     |
-| `MONOCLOUD_AUTH_RESOURCE`      | —                      | Default resource for access tokens |
-| `MONOCLOUD_AUTH_GROUPS_CLAIM`  | `groups`               | Claim name used by group checks. Also a real `MonoCloudOptions.groupsClaim` constructor option since `@monocloud/auth-nextjs@0.1.19` — per-call `groupsClaim` arg → constructor option → this env var → `"groups"`. |
-| `MONOCLOUD_AUTH_CALLBACK_URL`  | `/api/auth/callback`   | Customize auth routes              |
-| `MONOCLOUD_AUTH_SIGNIN_URL`    | `/api/auth/signin`     |                                    |
-| `MONOCLOUD_AUTH_SIGNOUT_URL`   | `/api/auth/signout`    |                                    |
-| `MONOCLOUD_AUTH_USER_INFO_URL` | `/api/auth/userinfo`   |                                    |
-| `MONOCLOUD_AUTH_BACK_CHANNEL_LOGOUT_URL` | `/api/auth/backchannel-logout` | Back-channel logout route (no `NEXT_PUBLIC_` mirror needed) |
-| `MONOCLOUD_AUTH_RESPONSE_TIMEOUT` | `10000` | Timeout in **milliseconds** for every request the SDK makes to MonoCloud (discovery, JWKS, token, userinfo). Minimum `1000`. Takes effect from `@monocloud/auth-nextjs@0.2.8` |
+In the MonoCloud dashboard (application → Application URLs) register the callback URL `http://localhost:3000/api/auth/callback`, the sign-out URL `http://localhost:3000` (and any other post-logout URL you use), plus `…/api/auth/backchannel-logout` if you use back-channel logout. Update them whenever a route or `MONOCLOUD_AUTH_APP_URL` changes.
 
-If you override a route (e.g. `MONOCLOUD_AUTH_SIGNIN_URL`), also set the matching `NEXT_PUBLIC_MONOCLOUD_AUTH_SIGNIN_URL` so client-side helpers (`useAuth`, `<SignIn>`, `<SignOut>`, etc.) discover it, AND update the redirect URI in the MonoCloud dashboard.
+## Wire the middleware/proxy
 
-## Programmatic client options
+`authMiddleware()` serves the auth routes **before** any protection check and protects every other route it matches. Pick the file name from the `next` major in `package.json`:
 
-The package-level helpers (`authMiddleware`, `getSession`, `protectPage`, etc.) use a singleton configured from `MONOCLOUD_AUTH_*` env vars. For constructor-only options, create and share a `MonoCloudNextClient` instance instead.
-
-`MonoCloudNextClient(options?: MonoCloudOptions)` accepts the node-core `MonoCloudOptions` shape. Notable nested session options:
+- Next.js 16+: `proxy.ts` (`src/proxy.ts` in a `src/` layout)
+- Next.js 13–15: `middleware.ts` (`src/middleware.ts`)
 
 ```ts
-interface MonoCloudSessionOptions {
-  cookie?: Partial<MonoCloudCookieOptions>;
-  sliding?: boolean;
-  duration?: number;
-  maximumDuration?: number;
-  store?: MonoCloudSessionStore;
-}
-
-interface MonoCloudSessionStore {
-  get(key: string): Promise<MonoCloudSession | undefined | null>;
-  set(
-    key: string,
-    data: MonoCloudSession,
-    lifetime: SessionLifetime,
-  ): Promise<void>;
-  delete(key: string): Promise<void>;
-}
-```
-
-Use `session.store` for Redis/database-backed sessions. There is no env var for a custom store; pass it in code:
-
-```ts
-import { MonoCloudNextClient } from "@monocloud/auth-nextjs";
-
-export const monoCloud = new MonoCloudNextClient({
-  session: {
-    store: redisSessionStore,
-  },
-});
-```
-
-Then use that shared client wherever the SDK helper is needed, for example `monoCloud.authMiddleware()` in `proxy.ts`/`middleware.ts` and `monoCloud.getSession()` in server code.
-
-## Wiring the middleware/proxy
-
-The middleware/proxy handles auth routes (`/api/auth/signin`, `/callback`, `/userinfo`, `/signout`, `/backchannel-logout`) internally **and** enforces route protection. You do not need a `[...monocloud]` catch-all when using the middleware.
-
-**File location depends on Next.js version:**
-
-- Next.js **16+**: `src/proxy.ts` (or `proxy.ts` at the root, mirroring your `app/`/`pages/` layout)
-- Next.js **13–15**: `src/middleware.ts` (or `middleware.ts`)
-
-The export and body are the same; only the filename differs.
-
-```ts
-// src/proxy.ts (Next 16+) or src/middleware.ts (Next 13–15)
+// src/proxy.ts (Next 16+) — identical body in src/middleware.ts (Next 13–15)
 import { authMiddleware } from "@monocloud/auth-nextjs";
 
 export default authMiddleware();
@@ -121,92 +79,60 @@ export const config = {
 };
 ```
 
-By default, **every route matched by `config.matcher` requires authentication**. To protect only specific routes:
+Keep `/api/auth/*` inside the matcher — the common `/((?!api|_next/static|…).*)` pattern excludes it and breaks sign-in.
+
+With no options, **every matched route requires a session**: pages redirect to sign-in with `return_url`, and paths starting with `/api` get `401 {"message":"unauthorized"}`. Narrow it with `protectedRoutes`:
 
 ```ts
-export default authMiddleware({
-  protectedRoutes: ["/dashboard", /^\/api\/admin(\/.*)?$/],
+authMiddleware({ protectedRoutes: ["^/dashboard", /^\/api\/admin(\/.*)?$/] }); // strings are unanchored regex sources
+authMiddleware({ protectedRoutes: [] }); // protect nothing; auth routes are still served
+authMiddleware({ protectedRoutes: (req) => req.nextUrl.pathname.startsWith("/app") }); // predicate, may be async
+authMiddleware({ protectedRoutes: [{ routes: ["^/admin"], groups: ["admin"] }] }); // also require a group (any-of)
+```
+
+Group failures return `403` (`{"message":"forbidden"}` under `/api`, plain-text `forbidden` elsewhere). Hooks (`onAccessDenied`, `onGroupAccessDenied`, `onError`) and composing with your own middleware: [protecting.md](references/protecting.md#authmiddleware-options).
+
+## Shared client instance (`MonoCloudNextClient`)
+
+The root function exports (`authMiddleware`, `getSession`, `protectPage`, …) share a lazily created singleton configured **only** from env vars. Code-only options — `session.store`, `onSessionCreating`, `onSetApplicationState`, `onBackChannelLogout`, `resources`, `fetcher` — need your own instance, and then **its** methods must be used everywhere (`monoCloud.authMiddleware()`, `monoCloud.getSession()`, …). Mixing in root exports splits the configuration — e.g. the root `getSession()` cannot see sessions kept in your store.
+
+```ts
+// src/lib/monocloud.ts
+import { MonoCloudNextClient } from "@monocloud/auth-nextjs";
+
+export const monoCloud = new MonoCloudNextClient({
+  session: { store: redisSessionStore }, // { get(key), set(key, session, lifetime), delete(key) }
 });
 ```
 
-To protect nothing (auth routes still handled, but the rest is public):
+## Read the session — server
 
-```ts
-export default authMiddleware({ protectedRoutes: [] });
-```
-
-Dynamic predicate (full custom logic):
-
-```ts
-export default authMiddleware({
-  protectedRoutes: (req) => req.nextUrl.pathname.startsWith("/api/protected"),
-});
-```
-
-Group-based protection in the middleware:
-
-```ts
-export default authMiddleware({
-  protectedRoutes: [
-    {
-      groups: ["admin", "editor"],
-      routes: ["/internal", /^\/api\/internal(\/.*)?$/],
-    },
-  ],
-});
-```
-
-## Reading the session — server
-
-`getSession()` is exported from the package root and works in Server Components, Server Actions, App Router Route Handlers, middleware/proxy, Pages API routes, and `getServerSideProps`. Returns `MonoCloudSession | undefined`.
+`getSession()` → `Promise<MonoCloudSession | undefined>`; claims are on `session.user`. Call it with no arguments in Server Components, Server Actions and Route Handlers; pass `req, res` in Pages API routes and `getServerSideProps`, and in custom middleware (so refreshed cookies land on the response you return).
 
 ```tsx
-// app/page.tsx (Server Component — no args needed)
+// app/page.tsx
 import { getSession } from "@monocloud/auth-nextjs";
 
 export default async function Page() {
   const session = await getSession();
-  if (!session) return <p>Not signed in</p>;
-  return <p>Hello {session.user.name}</p>;
+  return session ? <p>Hello {session.user.name}</p> : <p>Not signed in</p>;
 }
 ```
 
 ```ts
-// app/api/me/route.ts (App Router Route Handler)
-import { getSession } from "@monocloud/auth-nextjs";
-import { NextResponse } from "next/server";
-
-export const GET = async () => {
-  const session = await getSession();
-  return NextResponse.json(session?.user ?? null);
-};
-```
-
-```ts
-// pages/api/me.ts (Pages Router — pass req, res)
+// pages/api/me.ts — getServerSideProps uses the same shape: getSession(ctx.req, ctx.res)
 import { getSession } from "@monocloud/auth-nextjs";
 import type { NextApiRequest, NextApiResponse } from "next";
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getSession(req, res);
   res.json(session?.user ?? null);
 }
 ```
 
-```ts
-// pages/index.tsx (getServerSideProps — pass ctx.req, ctx.res)
-export const getServerSideProps: GetServerSideProps = async (ctx) => {
-  const session = await getSession(ctx.req, ctx.res);
-  return { props: { session: session ?? null } };
-};
-```
+`isAuthenticated()` and `isUserInGroup(groups, { matchAll?, groupsClaim? }?)` accept the same leading `req[, res]` arguments. `getSession({ refetchUserInfo: true })` re-reads the claims from MonoCloud's UserInfo endpoint and updates the session.
 
-## Reading the user — client
-
-`useAuth()` reads the user from `/api/auth/userinfo` via SWR. **No provider/wrapper is required** — just call the hook inside a Client Component.
+## Read the user — client
 
 ```tsx
 "use client";
@@ -215,240 +141,129 @@ import { useAuth } from "@monocloud/auth-nextjs/client";
 export default function Profile() {
   const { user, isLoading, isAuthenticated, error, refetch } = useAuth();
   if (isLoading) return null;
-  if (!isAuthenticated) return <p>Sign in to view your profile</p>;
-  return (
-    <>
-      <pre>{JSON.stringify(user, null, 2)}</pre>
-      <button onClick={() => refetch(true)}>Refresh</button>
-    </>
-  );
+  if (!isAuthenticated) return <p>Not signed in</p>;
+  return <button onClick={() => refetch(true)}>{user?.email} — refresh profile</button>;
 }
 ```
 
-`refetch(true)` re-fetches and asks the server to refresh from the OP's userinfo endpoint; `refetch()` just re-fetches the cached endpoint.
+`useAuth()` fetches the userinfo route with SWR (`204` → signed out); no provider is needed. `refetch()` re-reads the route; `refetch(true)` adds `?refresh=true`, so the server re-fetches claims from MonoCloud and updates the session. `refetch` is a no-op until a user has loaded.
 
-## Sign-in, sign-up, sign-out
-
-`<SignIn>`, `<SignUp>`, and `<SignOut>` render an `<a>` tag pointing at the configured auth routes. They work in Server **or** Client Components. Pass any extra anchor props through (className, etc.).
+## Sign in, sign up, sign out
 
 ```tsx
-import { SignIn, SignUp, SignOut } from '@monocloud/auth-nextjs/components';
+import { SignIn, SignUp, SignOut } from "@monocloud/auth-nextjs/components";
 
-// Sign in / sign up
-<SignIn>Sign In</SignIn>
-<SignIn returnUrl="/dashboard" loginHint="user@example.com">Sign In</SignIn>
-<SignUp returnUrl="/welcome">Sign Up</SignUp>
-
-// Sign out
-<SignOut>Sign Out</SignOut>
-<SignOut federated postLogoutUrl="/goodbye">Sign Out</SignOut>
+<SignIn returnUrl="/dashboard" loginHint="user@example.com">Sign in</SignIn>
+<SignUp returnUrl="/welcome">Sign up</SignUp> {/* always sends prompt=create */}
+<SignOut postLogoutUrl="/goodbye" federated>Sign out</SignOut>
 ```
 
-For programmatic redirects on the server (RSC, server actions, route handlers), use `redirectToSignIn()` / `redirectToSignOut()` from the root package. They throw a Next.js redirect and never resolve.
+They render plain `<a>` links (extra anchor props pass through) and work in Server and Client Components. `<SignIn>` also takes `authenticatorHint`, `prompt`, `scopes`, `resource`, `audience`, `idTokenHint`, `acrValues`, `display`, `uiLocales`, `maxAge`; `<SignOut>` takes `idTokenHint`. These travel as query parameters, honored only while `MONOCLOUD_AUTH_ALLOW_QUERY_PARAM_OVERRIDES` is `true` (default), and `scopes`/`resource` **replace** the configured defaults for that sign-in — include `openid`.
+
+Server-side redirects (App Router only — RSC, Server Actions, Route Handlers) call Next's `redirect()`, so code after them never runs:
 
 ```ts
 "use server";
-import { redirectToSignIn } from "@monocloud/auth-nextjs";
+import { redirectToSignIn, redirectToSignOut } from "@monocloud/auth-nextjs";
 
-export async function startLogin() {
-  await redirectToSignIn({ returnUrl: "/dashboard" });
-}
+export async function login() { await redirectToSignIn({ returnUrl: "/dashboard" }); }
+export async function logout() { await redirectToSignOut({ postLogoutRedirectUri: "/" }); }
 ```
 
-On the client, render `<RedirectToSignIn />` (from `/components/client`) to redirect once mounted.
+In a Client Component, render `<RedirectToSignIn returnUrl="…" />` from `/components/client` to redirect on mount.
 
 ## Protecting routes — at a glance
 
-| What you're protecting                                        | Helper                                     | Where it lives               |
-| ------------------------------------------------------------- | ------------------------------------------ | ---------------------------- |
-| Whole groups of routes (broadest)                             | `authMiddleware({ protectedRoutes })`      | `proxy.ts` / `middleware.ts` |
-| App Router Server Component page                              | `protectPage(Component, options?)`         | the page file                |
-| Pages Router `getServerSideProps`                             | `protectPage(options?)` (no component arg) | the page file                |
-| App Router Route Handler                                      | `protectApi(handler, options?)`            | `app/api/*/route.ts`         |
-| Pages Router API route                                        | `protectApi(handler, options?)`            | `pages/api/*.ts`             |
-| Server Component / Server Action / Route Handler — imperative | `await protect()` (App Router only)        | inline                       |
-| Client Component page (rendering only)                        | `protectClientPage(Component, options?)`   | the page file                |
-| Conditional UI in client component                            | `<Protected fallback={...}>`               | inside JSX                   |
+| Protecting | Helper | Denied (default) |
+| --- | --- | --- |
+| Groups of routes | `authMiddleware({ protectedRoutes })` | redirect / `401` under `/api` |
+| App Router page | `export default protectPage(Page, options?)` | redirect |
+| Pages Router page | `export const getServerSideProps = protectPage(options?)` | redirect |
+| App or Pages Router API | `protectApi(handler, options?)` | `401` / `403` JSON |
+| RSC / Server Action / Route Handler, inline | `await protect(options?)` (App Router only) | redirect (group failure too) |
+| Client page (rendering only) | `export default protectClientPage(Page, options?)` | browser redirect |
+| Part of client UI | `<Protected groups? fallback?>` | `fallback` |
 
-Quick examples:
+The helpers take `groups`, `matchAll` and `groupsClaim` (`<Protected>` uses `matchAllGroups`; middleware group rules are always any-of); the redirecting ones add `returnUrl` and `authParams`; most accept `onAccessDenied` / `onGroupAccessDenied` overrides.
 
 ```tsx
-// App Router page
-import { protectPage } from "@monocloud/auth-nextjs";
-export default protectPage(function Dashboard({ user }) {
-  return <p>Hi {user.email}</p>;
-});
-
-// App Router page, admins only
-export default protectPage(
-  function AdminPanel({ user }) {
-    return <p>Hi {user.email}</p>;
-  },
-  { groups: ["admin"], returnUrl: "/admin" },
-);
-```
-
-```ts
-// App Router API
-import { protectApi } from "@monocloud/auth-nextjs";
+import { protectPage, protectApi } from "@monocloud/auth-nextjs";
 import { NextResponse } from "next/server";
-export const GET = protectApi(async () => NextResponse.json({ ok: true }));
-```
 
-```tsx
-// Pages Router page
-import { protectPage } from "@monocloud/auth-nextjs";
-export default function Page({ user }) {
-  return <p>Hi {user.email}</p>;
-}
+// app/admin/page.tsx — the wrapped component receives `user`
+export default protectPage(({ user }) => <p>Hi {user.email}</p>, { groups: ["admin"] });
+
+// app/api/data/route.ts
+export const GET = protectApi(async () => NextResponse.json({ ok: true }));
+
+// pages/account.tsx — the page's props get `user`
 export const getServerSideProps = protectPage();
 ```
 
-```tsx
-// Imperative (App Router only — Server Component / Server Action / Route Handler)
-import { protect } from "@monocloud/auth-nextjs";
-export default async function SecretPage() {
-  await protect(); // redirects to sign-in if not authenticated
-  await protect({ groups: ["admin"] }); // also enforces group membership
-  return <p>Top secret</p>;
-}
-```
-
-```tsx
-// Client page
-"use client";
-import { protectClientPage } from "@monocloud/auth-nextjs/client";
-export default protectClientPage(function Page({ user }) {
-  return <p>Hi {user.email}</p>;
-});
-```
-
-```tsx
-// Conditional rendering inside a client component
-"use client";
-import { Protected } from "@monocloud/auth-nextjs/components/client";
-<Protected fallback={<p>Sign in to view</p>} groups={["admin"]}>
-  <AdminPanel />
-</Protected>;
-```
-
-For full option lists (custom `onAccessDenied`, `onGroupAccessDenied`, `authParams`, etc.), see `references/protecting.md`.
+Full option shapes, defaults and the server-action patterns: [protecting.md](references/protecting.md).
 
 ## Access tokens
 
-`getTokens()` returns the current token set and refreshes the default access token if needed. Throws `MonoCloudValidationError` if there is no session. Same calling conventions as `getSession()` (no args in App Router server context; pass `req`/`res` in Pages Router).
+`getTokens()` (same argument shapes as `getSession()`) returns `MonoCloudTokens` — `accessToken`, `accessTokenExpiration`, `scopes`, `idToken?`, `refreshToken?`, `isExpired`, … — refreshing the access token when it is missing or within 30 s of expiry.
 
 ```ts
 import { getTokens } from "@monocloud/auth-nextjs";
 
-const { accessToken, idToken, refreshToken, isExpired } = await getTokens();
+const { accessToken } = await getTokens();
+await fetch("https://api.example.com/things", { headers: { Authorization: `Bearer ${accessToken}` } });
 
-// Force a refresh:
 await getTokens({ forceRefresh: true });
-
-// Request a token for a specific resource / scopes (must have been consented):
-await getTokens({
-  resource: "https://api.example.com",
-  scopes: "read:things write:things",
-});
+await getTokens({ resource: "https://api.example.com", scopes: "read:things" }); // must have been granted at sign-in
 ```
 
-## Back-channel logout (OIDC)
+It throws `MonoCloudValidationError` (`Session does not exist`) without a session, and needs a refresh token to obtain a missing or expired token. Prefer Route Handlers, Server Actions or middleware: Server Components cannot write cookies, so a refresh there is not persisted for cookie-only sessions.
 
-MonoCloud can notify the app that a session must end, without any browser involvement. The endpoint lives at `/api/auth/backchannel-logout` (override with `MONOCLOUD_AUTH_BACK_CHANNEL_LOGOUT_URL` or `routes.backChannelLogout`) and is dispatched by **both** `authMiddleware()` and `monoCloudAuth()`.
+## Back-channel logout
 
-The callback is **constructor-only** — there is no env var for it. The route answers `404` until `onBackChannelLogout` is configured on a client instance, and the mounted handler must come from *that* instance:
+MonoCloud can `POST` a `logout_token` to `/api/auth/backchannel-logout` (override: `MONOCLOUD_AUTH_BACK_CHANNEL_LOGOUT_URL`). The route answers `404` until an `onBackChannelLogout` callback is set — constructor-only, no env var — on the instance whose `authMiddleware()`/`monoCloudAuth()` is mounted:
 
 ```ts
-// src/monocloud.ts
-import { MonoCloudNextClient } from "@monocloud/auth-nextjs";
-
 export const monoCloud = new MonoCloudNextClient({
   session: { store: redisSessionStore },
   onBackChannelLogout: async (sub, sid) => {
-    // Both args are optional (at least one of them is always present).
-    // The SDK's store key is a random UUID, so keep your own sub/sid -> key
-    // index in the store if you need to revoke by either identifier.
-    await redisSessionStore.deleteBySid(sid);
+    // At least one of sub/sid is present. Store keys are random UUIDs, so keep
+    // your own sub/sid → key index to find the sessions to delete.
   },
 });
+// proxy.ts: export default monoCloud.authMiddleware();
 ```
 
-```ts
-// src/proxy.ts (Next 16+) or src/middleware.ts (Next 13–15)
-import { monoCloud } from "./monocloud";
+Responses: `204` handled · `404` no callback · `405` not `POST` · `400 {"error":"invalid_request",…}` missing/invalid token · `500` config, JWKS or callback failure. Pair it with `session.store` (cookie-only sessions have nothing server-side to revoke) and register the URL in the dashboard. Details: [troubleshooting.md](references/troubleshooting.md#back-channel-logout-returns-404-405-400-or-500).
 
-export default monoCloud.authMiddleware();
-```
+## Alternative: catch-all route
 
-Handler responses:
-
-| Status | When |
-| ------ | ---- |
-| `204` | Logout token validated and `onBackChannelLogout` completed |
-| `404` | No `onBackChannelLogout` configured, or the path is not the configured route |
-| `405` | The configured route was hit with anything other than `POST` |
-| `400` | `logout_token` missing from the form body or invalid — body is `{ "error": "invalid_request", "error_description": "The logout token is missing or invalid." }` |
-| `500` | Configuration, discovery/JWKS, or `onBackChannelLogout` callback failure |
-
-Notes:
-
-- Notifications are `application/x-www-form-urlencoded` **`POST`** requests carrying `logout_token`; no session cookie is involved.
-- The `onError` handler passed to `authMiddleware()` / `monoCloudAuth()` also covers back-channel logout errors; a missing or invalid logout token reaches it as a `MonoCloudTokenError` (or `MonoCloudValidationError` when the token is absent). Supplying `onError` replaces the `400` response, so send your own.
-- Pair `onBackChannelLogout` with `session.store` — with cookie-only sessions there is nothing server-side to revoke.
-- Keep the route inside `config.matcher` (the recommended matcher covers it) and register the URL as the client's back-channel logout URI in the MonoCloud dashboard.
-
-## Alternative: catch-all route (only when middleware can't be used)
-
-The middleware handles auth routes for you. If you cannot use middleware (rare — e.g. infrastructure constraints), mount `monoCloudAuth()` on a catch-all instead:
+Only when middleware can't be used, mount `monoCloudAuth()` instead — never both (a middleware that matches `/api/auth/*` answers first, so the catch-all would never run):
 
 ```ts
-// App Router
-// src/app/api/auth/[...monocloud]/route.ts
+// app/api/auth/[...monocloud]/route.ts — POST is needed for form_post callbacks and back-channel logout
 import { monoCloudAuth } from "@monocloud/auth-nextjs";
-
 const handler = monoCloudAuth();
-
-// Back-channel logout notifications and the `form_post` response mode arrive as POST,
-// so the same handler must be exported for POST as well as GET.
 export { handler as GET, handler as POST };
-```
 
-```ts
-// Pages Router
-// src/pages/api/auth/[...monocloud].ts
-import { monoCloudAuth } from "@monocloud/auth-nextjs";
+// pages/api/auth/[...monocloud].ts — receives every method already
 export default monoCloudAuth();
 ```
 
-The Pages Router default export already receives every HTTP method, so it needs no extra export — only the App Router needs the explicit `POST`.
-
-Do not do this **in addition** to `authMiddleware()` — pick one. The default and recommended path is `authMiddleware()`.
-
 ## Common pitfalls
 
-1. **Wrong filename for the version.** `proxy.ts` only works on Next 16+. On Next 13–15 the file must be named `middleware.ts`. Check `next` in `package.json` before suggesting a filename.
-2. **Adding `[...monocloud]/route.ts` while middleware is in place.** Double-mounted auth routes lead to weird redirect loops. Use middleware OR `monoCloudAuth()` — not both.
-3. **`useAuth()` returning no user after sign-in.** Usually means the matcher excludes `/api/auth/userinfo`, or the middleware isn't matching the userinfo path. Make sure `config.matcher` covers it (the recommended matcher above does).
-4. **Calling `protect()` / `redirectToSignIn()` / `redirectToSignOut()` outside the App Router.** They throw with a clear message — these helpers are App-Router-only (RSC, server actions, route handlers). For the Pages Router, use `protectPage()` / `protectApi()` or call `getSession(req, res)` and respond yourself.
-5. **`protectApi()` returning 401/403 without a sign-in redirect.** That's by design — API routes return JSON, not redirects. If you want a redirect, do it from a page or middleware.
-6. **Putting `<Protected>` or `useAuth()` in a Server Component.** Both require `"use client"`. Use `getSession()` for server-side conditional rendering.
-7. **Forgetting `NEXT_PUBLIC_*` mirror when overriding auth routes.** Client helpers won't find the new URL otherwise.
-8. **Mutating cookies after `getSession()` in middleware.** Pass the response object to `getSession(req, res)` (and return that response) so cookie refreshes are preserved.
-9. **Back-channel logout route returning 404.** `onBackChannelLogout` has no env var — it must be passed to `new MonoCloudNextClient({ onBackChannelLogout })`, and that instance's `authMiddleware()` / `monoCloudAuth()` must be the one mounted. Notifications are `POST`, so an App Router catch-all must export the handler for `POST` as well as `GET`.
-
-## Onboarding checklist for a fresh integration
-
-1. `npm install @monocloud/auth-nextjs` (or pnpm/yarn). Requires **Node.js ≥ 20**.
-2. Add the five required env vars to `.env.local`. Generate `MONOCLOUD_AUTH_COOKIE_SECRET` with `openssl rand -hex 32`.
-3. In the MonoCloud dashboard, add `http://localhost:3000/api/auth/callback` to allowed redirect URIs and `http://localhost:3000` to allowed post-logout URIs.
-4. Create `src/proxy.ts` (Next 16+) **or** `src/middleware.ts` (Next ≤15) with `export default authMiddleware()` and the recommended `config.matcher`.
-5. Add a header with `<SignIn>` / `<SignOut>` (and optionally `<SignUp>`) so users can authenticate.
-6. Use `getSession()` for server-side reads, `useAuth()` for client-side reads. Add `protectPage`/`protectApi` only on routes that need stricter enforcement than the middleware.
-7. For protected fetches that need an access token, call `getTokens()` and forward `accessToken` in the `Authorization` header.
+1. **Wrong file name for the Next.js major.** Next ≤ 15 ignores `proxy.ts`; Next 16+ uses `proxy.ts`. Check the installed `next` version.
+2. **Matcher excludes `/api`.** Auth routes then 404 and `useAuth()` reports `Failed to fetch user`.
+3. **Custom `MonoCloudNextClient` mixed with root exports.** Store, hooks and `resources` only apply to the instance's own methods.
+4. **`protect()` / `redirectToSignIn()` / `redirectToSignOut()` in the Pages Router or client code.** They throw `… can only be used in App Router server environments …`; use `protectPage()` / `protectApi()` / `getSession(req, res)` or `<RedirectToSignIn>`.
+5. **Expecting redirects from `protectApi()` or a 403 from `protect()`.** APIs get JSON `401`/`403`; `protect()` sends group failures to sign-in — use `isUserInGroup()` to answer `403` yourself.
+6. **Client helpers in Server Components.** `useAuth`, `protectClientPage`, `<Protected>` and `<RedirectToSignIn>` belong in `"use client"` files, and they only hide UI — gate data with server helpers.
+7. **Overridden routes without `NEXT_PUBLIC_` twins.** `<SignIn>`, `<SignOut>`, `useAuth()` keep using the defaults.
+8. **Tenant domain without `https://`, or `MONOCLOUD_AUTH_SCOPES` without `openid`.** Config validation fails and the auth routes return `500`.
+9. **Back-channel logout stuck on `404`.** `onBackChannelLogout` is constructor-only and must be on the mounted instance.
 
 ## Deeper reference
 
-- `references/api-surface.md` — every export by subpath, with signatures.
-- `references/protecting.md` — full option shapes for `protect`, `protectApi`, `protectPage`, `protectClientPage`, and the `<Protected>` component.
-- `references/troubleshooting.md` — extended symptom → cause → fix index covering the items in "Common pitfalls" above, plus less frequent issues (cookie refresh in middleware, route-override + `NEXT_PUBLIC_*` mirror, training-data SDK ghosts).
+- [references/api-surface.md](references/api-surface.md) — every export with signatures, `MonoCloudOptions`, models, errors, auth-route contract, full env-var table.
+- [references/protecting.md](references/protecting.md) — option shapes and default behavior of each protection helper, group rules, which helpers forward which auth params.
+- [references/troubleshooting.md](references/troubleshooting.md) — symptom → cause → fix, including config-validation messages and callback errors.
+- [scripts/verify.js](scripts/verify.js) — `node scripts/verify.js [project-dir]` checks dependencies, proxy/middleware wiring, env vars and SDK imports.
