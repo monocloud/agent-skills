@@ -1,6 +1,6 @@
 ---
 name: monocloud-auth-react
-description: Use when integrating MonoCloud authentication into a React single-page application — installing or configuring `@monocloud/auth-react`, wrapping the tree in `<MonoCloudAuthProvider>` (`tenantDomain`, `clientId`, `appUrl`), reading `useAuth()` state (`isLoading`, `isAuthenticated`, `user`, `session`, `error`) and actions (`signIn`, `signOut`, `signInSilent`, `refreshSession`, `refetchUserInfo`, `getTokens`), rendering `<SignIn>` / `<SignUp>` / `<SignOut>` buttons or `<Protected groups=…>` gates, mounting `<ProcessCallback>` on a callback route with `autoProcessCallback={false}`, reaching the underlying `MonoCloudWebJSClient` via `useClient()`, React Router navigation via `postCallback`, or troubleshooting "useAuth() can only be used inside a <MonoCloudAuthProvider>", StrictMode double callbacks, `signIn` errors landing in `error`, render loops after `getTokens()`, popup blockers, `login_required` from silent sign-in, or `Session does not contain refresh token`.
+description: Use when integrating MonoCloud authentication into a React single-page application — installing or configuring `@monocloud/auth-react`, wrapping the tree in `<MonoCloudAuthProvider>` (`tenantDomain`, `clientId`, `appUrl`), reading `useAuth()` state (`isLoading`, `isAuthenticated`, `user`, `session`, `error`) and actions (`signIn`, `signOut`, `signInSilent`, `refreshSession`, `refetchUserInfo`, `getTokens`), rendering `<SignIn>` / `<SignUp>` / `<SignOut>` buttons or `<Protected groups=…>` gates, mounting `<ProcessCallback>` on a callback route with `autoProcessCallback={false}`, reaching the underlying `MonoCloudWebJSClient` via `useClient()`, React Router navigation via `postCallback`, or troubleshooting "useAuth() can only be used inside a <MonoCloudAuthProvider>", StrictMode double callbacks, `signIn` errors landing in `error`, effects re-running forever on `user` / `session`, popup blockers, `login_required` from silent sign-in, or `Session does not contain refresh token`.
 license: MIT
 ---
 
@@ -86,7 +86,7 @@ export default function App() {
 }
 ```
 
-On mount the provider runs `processCallback()` (finishing any sign-in or sign-out the browser is returning from) and loads the stored session; `isLoading` stays `true` until then. StrictMode's double effect is guarded, so the callback is processed once.
+On mount the provider subscribes to the client's session changes and runs `processCallback()` (finishing any sign-in or sign-out the browser is returning from); `isLoading` stays `true` until the first session is delivered — when returning from MonoCloud, after the code exchange. StrictMode's double effect is guarded, so the callback is processed once.
 
 ## `<MonoCloudAuthProvider>` props
 
@@ -117,16 +117,16 @@ The client is built **once**, on first render: later prop changes — including 
 
 | Member | Notes |
 | --- | --- |
-| `isLoading` | `true` during bootstrap and while `signIn` / `signOut` run. |
+| `isLoading` | `true` during bootstrap and while `signIn` / `signOut` are pending; any session write sets it `false`. |
 | `isAuthenticated` | A session exists in storage. |
-| `user` / `session` | `MonoCloudUser` / `MonoCloudSession` (`idToken`, `accessTokens[]`, `refreshToken`, `authorizedScopes`). Replaced by new objects after every action. |
-| `error` | Last failure of callback processing, `signIn` or `signOut`; cleared by the next successful action. |
+| `user` / `session` | `MonoCloudUser` / `MonoCloudSession` (`idToken`, `accessTokens[]`, `refreshToken`, `authorizedScopes`). New objects on every session write (sign-in/out, refresh, UserInfo refetch, a refreshing `getTokens()`); untouched otherwise. |
+| `error` | Last failure of callback processing, `signIn` or `signOut`; cleared by the next session write. A failed callback keeps the current session. |
 | `signIn(o?)` / `signOut(o?)` | Web-js options (`mode`, `returnUrl`, `scopes`, …). **Never reject** — failures go to `error`. |
 | `signInSilent(o?)` | Resolves to the session; **rejects** (`MonoCloudOPError` `login_required`, …). |
 | `refreshSession(o?)` / `refetchUserInfo()` | Reject on failure. |
 | `getTokens(o?)` | `{ accessToken, idToken, refreshToken, isExpired, … }`, refreshing first when needed; rejects on failure. |
 
-Every successful action re-reads the session and publishes it to context. The actions are stable across renders. Outside the provider it throws `MonoCloudJsError: useAuth() can only be used inside a <MonoCloudAuthProvider>...</MonoCloudAuthProvider>.`
+Context follows the client's `onSessionChange()`: every session write reaches it — from these actions, `<ProcessCallback>`, or direct `useClient()` calls — and calls that write nothing (e.g. `getTokens()` returning a stored token) don't re-render. The actions are stable across renders. Outside the provider it throws `MonoCloudJsError: useAuth() can only be used inside a <MonoCloudAuthProvider>...</MonoCloudAuthProvider>.`
 
 ```tsx
 const { getTokens } = useAuth();
@@ -224,7 +224,7 @@ createRoot(document.getElementById('root')!).render(
 ```
 
 - With `autoProcessCallback={false}` nothing else processes callbacks: every path MonoCloud returns to (`callbackPath` and `signOutPath`; popup and silent flows land there too) must render `<ProcessCallback>`.
-- Never combine it with `autoProcessCallback` on: the second run finds nothing pending and briefly publishes a signed-out, not-loading state while the first is still exchanging the code.
+- With `autoProcessCallback` on, `<ProcessCallback>` is optional; if both run, they share the one code exchange.
 - `<ProcessCallback>` doesn't navigate — without a `postCallback` that does, the user stays on the callback page.
 
 ## React Router navigation (`postCallback`)
@@ -255,7 +255,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 ## `useClient()`
 
-Returns the provider's `MonoCloudWebJSClient`, for operations `useAuth()` doesn't wrap — e.g. `client.oidcClient.revokeToken(accessToken)`. Calls made on it don't update context: after a session-changing call (`client.signOut()`, `client.refreshSession()`, …) the UI stays stale until the next `useAuth()` action, so prefer the hook's actions. Outside the provider: `MonoCloudJsError: useClient() can only be used inside a <MonoCloudAuthProvider>...</MonoCloudAuthProvider>.`
+Returns the provider's `MonoCloudWebJSClient`, for operations `useAuth()` doesn't wrap — e.g. `client.oidcClient.revokeToken(accessToken)`. Session writes made through it (`client.refreshSession()`, `client.signOut()`, …) still reach `useAuth()`, because the provider follows `client.onSessionChange()`; only the hook's `signIn` / `signOut` set `isLoading` and turn failures into `error` (direct calls reject). Outside the provider: `MonoCloudJsError: useClient() can only be used inside a <MonoCloudAuthProvider>...</MonoCloudAuthProvider>.`
 
 ## Errors
 
@@ -274,8 +274,8 @@ Re-exported from `@monocloud/auth-web-js` (same classes, so `instanceof` works a
 
 1. **Hooks or `<ProcessCallback>` outside `<MonoCloudAuthProvider>`** — throws `MonoCloudJsError`.
 2. **`try { await signIn() } catch`** — never catches; read `error` from `useAuth()`.
-3. **Effects that depend on `user` / `session` and call an action** (`getTokens`, `refetchUserInfo`, …) — every action publishes new objects, so the effect re-runs forever. Depend on `isAuthenticated` or `user?.sub`.
-4. **`<ProcessCallback>` with `autoProcessCallback` on** (transient signed-out state), or **`autoProcessCallback={false}` without `<ProcessCallback>`** on the return routes (callbacks never complete).
+3. **Effects that depend on `user` / `session` and write the session** (`refetchUserInfo()`, `refreshSession()`, `signInSilent()`, `getTokens({ forceRefresh: true })`) — each write publishes new objects, so the effect re-runs forever. Depend on `isAuthenticated` or `user?.sub`.
+4. **`autoProcessCallback={false}` without `<ProcessCallback>`** on the return routes — callbacks never complete.
 5. **Changing provider props at runtime** — ignored; remount with `key`.
 6. **Using this package in Next.js** — use `@monocloud/auth-nextjs`.
 7. **No `offline_access`**, or **scopes without `openid`** — no refresh token / no profile.
@@ -289,6 +289,6 @@ Re-exported from `@monocloud/auth-web-js` (same classes, so `instanceof` works a
 
 ## Verify and go deeper
 
-- [`scripts/verify.js`](scripts/verify.js) — run `node scripts/verify.js [project-dir]` from this skill's folder: checks the dependency and React peers, imports against the real exports, provider and `<ProcessCallback>` wiring, `useClient()` misuse, effect loops, popups in effects, placeholders, `clientSecret`, browser-exposed secrets in `.env*`, Vite env usage, `MemoryStorage` and `offline_access`.
+- [`scripts/verify.js`](scripts/verify.js) — run `node scripts/verify.js [project-dir]` from this skill's folder: checks the dependency and React peers, imports against the real exports, provider and `<ProcessCallback>` wiring, effect loops, popups in effects, placeholders, `clientSecret`, browser-exposed secrets in `.env*`, Vite env usage, `MemoryStorage` and `offline_access`.
 - [`references/api-surface.md`](references/api-surface.md) — every export, provider lifecycle, hook and component signatures, errors.
 - [`references/troubleshooting.md`](references/troubleshooting.md) — symptom → cause → fix for React-specific issues; browser-client issues (callback URLs, popups, silent sign-in, ID-token errors) are covered by the `monocloud-web-js` skill's troubleshooting.

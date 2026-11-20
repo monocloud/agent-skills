@@ -26,7 +26,7 @@ const EXPORTS = new Set([
   'ResponseModes', 'CodeChallengeMethod', 'SecurityAlgorithms', 'Group',
 ]);
 // Exported by @monocloud/auth-web-js but not re-exported here.
-const WEB_JS_ONLY = new Set(['MonoCloudOidcClient', 'isUserInGroup', 'Jwks', 'IssuerMetadata', 'Tokens',
+const WEB_JS_ONLY = new Set(['MonoCloudOidcClient', 'isUserInGroup', 'SessionChangeListener', 'Jwks', 'IssuerMetadata', 'Tokens',
   'CallbackParams', 'EndSessionParameters', 'JwsHeaderParameters', 'RefetchUserInfoOptions']);
 
 // Supported peer ranges: react ^18.0.0 || ^19.2.3, react-dom ^18.3.1 || ^19.2.3 (minimum minor.patch per major).
@@ -37,7 +37,8 @@ const SOURCE_EXT = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'
 const PLACEHOLDER = /<your-(tenant|tenant-domain|domain|client-id)>/;
 const PUBLIC_ENV = /^(VITE_|REACT_APP_|NEXT_PUBLIC_|PUBLIC_|EXPO_PUBLIC_)/;
 const VITE_BUILTIN_ENV = new Set(['MODE', 'BASE_URL', 'PROD', 'DEV', 'SSR']);
-const ACTIONS = /\b(getTokens|refetchUserInfo|refreshSession|signInSilent)\s*\(/;
+// Calls that write the session every time they succeed (a plain getTokens() writes only when it refreshes).
+const SESSION_WRITES = /\b(refetchUserInfo|refreshSession|signInSilent)\s*\(|\bgetTokens\s*\(\s*\{[^}]*\bforceRefresh\s*:\s*true/;
 
 const findings = [];
 const pass = (m) => findings.push(['PASS', m]);
@@ -228,7 +229,6 @@ if (!files.length) {
   const secretFiles = [];
   const placeholderFiles = [];
   const viteEnvMisses = [];
-  const clientMutations = [];
   const loopingEffects = [];
   const popupEffects = [];
   const serverComponentFiles = [];
@@ -267,14 +267,8 @@ if (!files.length) {
     if (/\b(getTokens|refreshSession)\s*\(/.test(text)) tokenCalls = true;
     if (text.includes('offline_access')) offlineAccess = true;
 
-    // State-changing calls on the raw client bypass the provider's context sync.
-    for (const m of text.matchAll(/\b(?:const|let|var)\s+([\w$]+)\s*=\s*useClient\s*\(\s*\)/g)) {
-      if (new RegExp(`\\b${escapeRe(m[1])}\\.(signIn|signOut|signInSilent|refreshSession|refetchUserInfo|processCallback)\\s*\\(`).test(text)) {
-        clientMutations.push(rel(file));
-      }
-    }
     for (const { body, deps: effectDeps } of effects(text)) {
-      if (effectDeps !== null && ACTIONS.test(body) && /\b(user|session)\b(?!\s*\??\.)/.test(effectDeps)) loopingEffects.push(rel(file));
+      if (effectDeps !== null && SESSION_WRITES.test(body) && /\b(user|session)\b(?!\s*\??\.)/.test(effectDeps)) loopingEffects.push(rel(file));
       if (/\bsignIn\s*\(\s*\{[^}]*mode\s*:\s*['"]popup['"]/.test(body)) popupEffects.push(rel(file));
     }
     if (deps.vite) {
@@ -297,10 +291,8 @@ if (!files.length) {
     if (providerFound) pass('<MonoCloudAuthProvider> is rendered.');
     else warn('No <MonoCloudAuthProvider> found — wrap the app root so useAuth() / useClient() / components work.');
   }
-  if (processCallbackComponent && !autoProcessOff) warn('<ProcessCallback> is rendered but autoProcessCallback={false} is not set — both run processCallback(), and the duplicate briefly publishes a signed-out state mid-callback.');
   if (autoProcessOff && !processCallbackComponent) warn('autoProcessCallback={false} is set but no <ProcessCallback> is rendered — sign-in/sign-out callbacks will never complete.');
-  if (clientMutations.length) warn(`State-changing calls on the useClient() client in ${list(clientMutations)} — they don't update useAuth() state; use the useAuth() actions instead.`);
-  if (loopingEffects.length) warn(`useEffect with user/session dependencies calls a useAuth() action in ${list(loopingEffects)} — each action publishes new user/session objects, so the effect loops. Depend on isAuthenticated or user?.sub.`);
+  if (loopingEffects.length) warn(`useEffect with user/session dependencies writes the session (refetchUserInfo / refreshSession / signInSilent / getTokens({ forceRefresh: true })) in ${list(loopingEffects)} — each write publishes new user/session objects, so the effect loops. Depend on isAuthenticated or user?.sub.`);
   if (popupEffects.length) warn(`Popup sign-in started inside useEffect in ${list(popupEffects)} — browsers block popups not opened from a click; trigger it from an event handler or use <SignIn mode="popup">.`);
   if (serverComponentFiles.length) warn(`Hooks from ${PKG} in app/ files without "use client": ${list(serverComponentFiles)}.`);
   if (secretFiles.length) warn(`clientSecret passed in browser code (${list(secretFiles)}) — SPA clients are public; remove it and rely on PKCE.`);

@@ -111,8 +111,13 @@ if (deps[CORE_PKG]) warn(`${CORE_PKG} is a direct dependency. It is the SDK's in
 if (BROWSER_DEPS.some((d) => deps[d]) && !SERVER_DEPS.some((d) => deps[d])) {
   warn('This looks like a browser-only app. The management SDK holds a tenant admin API key and must run on a server, never in a client bundle.');
 }
-if (Number(process.versions.node.split('.')[0]) < 18) {
-  warn(`Node ${process.versions.node}: the SDK's built-in transport needs global fetch and AbortSignal.timeout (Node 18+), or a custom fetcher.`);
+const runtimeGaps = [
+  typeof fetch !== 'function' && 'fetch',
+  !(typeof AbortSignal === 'function' && typeof AbortSignal.timeout === 'function') && 'AbortSignal.timeout',
+  !(typeof Headers === 'function' && typeof Headers.prototype.getSetCookie === 'function') && 'Headers.getSetCookie()',
+].filter(Boolean);
+if (runtimeGaps.length) {
+  warn(`Node ${process.versions.node} lacks ${runtimeGaps.join(', ')}, which the SDK's built-in transport uses. Run a current Node LTS (20+), or pass a custom fetcher.`);
 }
 
 // Gather source facts (used by the configuration checks too).
@@ -173,7 +178,7 @@ for (const { src, v } of timeouts) {
 if (timeouts.length && passesOption('config')) warn(`${TIMEOUT} is set, but init() is passed a \`config\` object, so the SDK ignores the env var.`);
 
 // 3. Source checks
-const hits = { newCtor: [], core: [], coreOnly: [], useClient: [], publicRef: [], hardKey: [], tsOptions: [], unknown: [], dotData: [] };
+const hits = { newCtor: [], core: [], coreOnly: [], useClient: [], publicRef: [], hardKey: [], tsOptions: [], unknown: [], dotData: [], cookieString: [] };
 const ids = [...clientIds].map(escapeId).join('|');
 const dot = '\\s*!?\\s*\\??\\.\\s*'; // ".", "!.", "?."
 const callRe = ids && new RegExp(`\\b(?:${ids})${dot}(${ACCESSORS})${dot}([A-Za-z_$][\\w$]*)\\s*\\(`, 'g');
@@ -200,6 +205,7 @@ for (const [f, t] of texts) {
   if (bad.length) hits.coreOnly.push(`${rel(f)} (${list(bad)})`);
   if (t.includes(PKG) && t.split(/\r?\n/).slice(0, 5).some((l) => /^\s*['"]use client['"]/.test(l))) hits.useClient.push(rel(f));
   if (/\bapiKey\s*:\s*['"][^'"\s]{12,}['"]/.test(t)) hits.hardKey.push(rel(f));
+  if (/\bheaders\s*\??\.?\s*\[\s*['"`]set-cookie['"`]\s*\]\s*!?\s*\??\.\s*(?:split|startsWith|endsWith|trim|match|replace|replaceAll|substring|toLowerCase|toUpperCase)\s*\(/i.test(t)) hits.cookieString.push(rel(f));
 }
 for (const [f, o] of initOptions) {
   if (/\.[mc]?tsx?$/.test(f) && !o.includes('...') && !(/\bdomain\b/.test(o) && /\bapiKey\b/.test(o))) hits.tsOptions.push(rel(f));
@@ -224,6 +230,7 @@ report(hits.hardKey, (l) => warn(`Likely hard-coded apiKey literal in ${l}. Read
 report(hits.tsOptions, (l) => warn(`MonoCloudManagementClient.init({ ... }) without both domain and apiKey in ${l}. MonoCloudConfig requires both whenever options are passed, so this does not type-check.`));
 report(hits.unknown, (l) => fail(`Calls to methods that don't exist on the resource client: ${l}. See references/api-surface.md.`));
 report(hits.dotData, (l) => warn(`Management response read via .data / .Data / .PageData in ${l}. The JS SDK returns the body on .result and paging info on .pageData.`));
+report(hits.cookieString, (l) => warn(`headers['set-cookie'] used as a string in ${l}. On management responses it is a string[] (one entry per cookie, absent when none); iterate it and forward each entry as its own Set-Cookie header.`));
 
 // Report
 for (const [k, m] of findings) console.log(`[${k}] ${m}`);

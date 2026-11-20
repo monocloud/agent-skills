@@ -144,6 +144,12 @@ const { accessToken } = await client.getTokens({ resource: 'https://api.example.
 
 UserInfo 401/403 also raises `MonoCloudTokenError` (message `<error>: <description>`; `.code` `'insufficient_scope'` or `'invalid_token'`).
 
+## UI doesn't update after a popup sign-in, refresh or sign-out
+
+**Cause:** the UI was rendered from a single `getSession()` read; nothing tells it about later writes. Or the change happened in another tab — `onSessionChange()` reports only this client instance's writes in this tab.
+
+**Fix:** render from `client.onSessionChange(session => …)`, which delivers the stored session and then every write (sign-in, sign-out, `refreshSession()`, `refetchUserInfo()`, a refreshing `getTokens()`). For other tabs, also listen for the window `storage` event on the `mc.session.<clientId>` key and re-read with `getSession()`.
+
 ## Session lost on reload, or a full page load after sign-in
 
 **Causes:**

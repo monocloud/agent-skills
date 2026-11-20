@@ -1,6 +1,6 @@
 # `@monocloud/management` — API surface
 
-Verified against `@monocloud/management@0.4.0` (`monocloud/management-js` @ `c771c71`).
+Verified against `@monocloud/management@0.4.1` (`monocloud/management-js` @ `06533bd`).
 
 Every public export and resource-client method. Configuration, response handling, pagination and error-handling guidance live in [`SKILL.md`](../SKILL.md); IntelliSense on the named request/response types is authoritative for model fields.
 
@@ -52,9 +52,9 @@ class MonoCloudManagementClient {
 }
 
 interface MonoCloudConfig {
-  domain: string;
-  apiKey: string;
-  config?: { timeout?: number }; // milliseconds
+  domain: string;                // tenant host — used only by the built-in transport
+  apiKey: string;                // sent as X-API-KEY by the built-in transport
+  config?: { timeout?: number }; // built-in transport timeout, milliseconds (default 10000)
 }
 
 type Fetcher = (input: string | URL, init?: RequestInit) => Promise<Response>;

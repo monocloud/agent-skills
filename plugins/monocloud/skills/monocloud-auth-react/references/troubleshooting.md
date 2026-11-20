@@ -10,19 +10,25 @@ Also `useClient() can only be used inside …` and `<ProcessCallback /> can only
 
 **Fix:** make `<MonoCloudAuthProvider>` an ancestor of every consumer; in tests, wrap the component in the provider (or mock the hook module).
 
-## `isLoading` never becomes `false`
+## `isLoading` never becomes `false`, or `<ProcessCallback>` stays on `loading`
 
-**Cause:** bootstrap failures don't cause this — they set `isLoading: false` and `error`. A promise that never settles does: a custom `postCallback` that never resolves (the client awaits it), or a custom `IStorage` whose `getItem` never resolves.
+**Cause:** a promise that never settles — bootstrap failures set `isLoading: false` and `error` instead. A custom `IStorage` whose `getItem` never resolves blocks the first session delivery; a custom `postCallback` that never resolves keeps `processCallback()`, and so `<ProcessCallback>`'s `loading`, pending (the client awaits it).
 
-**Fix:** let `postCallback` return after navigating; make every `IStorage` method resolve (`getItem` → `null` on a miss).
+**Fix:** make every `IStorage` method resolve (`getItem` → `null` on a miss); let `postCallback` return after navigating.
 
-During a popup `signIn` / `signOut`, `isLoading` is `true` until the popup completes, is closed, or hits `authWindowTimeout` — render the page normally rather than a full-screen spinner if that matters.
+During a popup `signIn`, `isLoading` is `true` until the popup completes, is closed, or hits `authWindowTimeout` — render the page normally rather than a full-screen spinner if that matters.
 
-## Brief signed-out state while returning from MonoCloud
+## A route guard sends the user to sign-in while returning from MonoCloud
 
-**Cause:** `<ProcessCallback>` is mounted while `autoProcessCallback` is on. Both run `processCallback()`; the one that finds nothing pending finishes first and publishes `isLoading: false` with the old (signed-out) state, and route guards may redirect before the real exchange completes.
+**Cause:** the guard checks `isAuthenticated` without waiting for `isLoading`. While the callback's code exchange runs, the provider is loading and still signed out.
 
-**Fix:** pick one: the default (no `<ProcessCallback>`), or `autoProcessCallback={false}` plus `<ProcessCallback>` on the callback routes. StrictMode alone is fine — both code paths guard their mount effect.
+**Fix:** decide only once loading has finished:
+
+```tsx
+const { isLoading, isAuthenticated } = useAuth();
+if (isLoading) return null; // or a spinner
+if (!isAuthenticated) return <Navigate to="/" replace />;
+```
 
 ## Callbacks never complete with `autoProcessCallback={false}`
 
@@ -43,11 +49,11 @@ useEffect(() => {
 }, [error]);
 ```
 
-For throw semantics, call the client from `useClient()` — the context then won't refresh until the next `useAuth()` action.
+For throw semantics, call the client from `useClient()` — session changes still reach `useAuth()`, but `isLoading` and `error` aren't set.
 
 ## Endless re-renders or repeated token/UserInfo requests
 
-**Cause:** every `useAuth()` action ends by re-reading storage and publishing new `user` / `session` objects. An effect that lists `user` or `session` as a dependency and calls `getTokens()`, `refetchUserInfo()`, `refreshSession()` or `signInSilent()` re-triggers itself forever.
+**Cause:** each session write publishes new `user` / `session` objects. An effect that lists `user` or `session` as a dependency and calls something that writes the session every time — `refetchUserInfo()`, `refreshSession()`, `signInSilent()`, `getTokens({ forceRefresh: true })` — re-triggers itself forever. (A `getTokens()` that returns a stored token writes nothing and doesn't re-render.)
 
 **Fix:** depend on primitives:
 
@@ -136,4 +142,4 @@ useEffect(() => {
 node scripts/verify.js [project-dir]   # run from the skill folder
 ```
 
-[`../scripts/verify.js`](../scripts/verify.js) fails when `@monocloud/auth-react` is missing or the code imports names or subpaths the package doesn't export; it warns about React / React DOM versions outside the peer ranges, Next.js projects, a missing provider, `<ProcessCallback>` / `autoProcessCallback` mismatches, state-changing calls on `useClient()`, effects that loop on `user` / `session`, popup sign-in inside effects, placeholders, `clientSecret`, MonoCloud secrets in browser-exposed `.env*` variables, `MONOCLOUD_AUTH_*` variables (never read by this SDK), non-`VITE_` `import.meta.env` reads, `MemoryStorage` without `postCallback`, and token calls without `offline_access`.
+[`../scripts/verify.js`](../scripts/verify.js) fails when `@monocloud/auth-react` is missing or the code imports names or subpaths the package doesn't export; it warns about React / React DOM versions outside the peer ranges, Next.js projects, a missing provider, `autoProcessCallback={false}` without `<ProcessCallback>`, effects that write the session while depending on `user` / `session`, popup sign-in inside effects, placeholders, `clientSecret`, MonoCloud secrets in browser-exposed `.env*` variables, `MONOCLOUD_AUTH_*` variables (never read by this SDK), non-`VITE_` `import.meta.env` reads, `MemoryStorage` without `postCallback`, and token calls without `offline_access`.

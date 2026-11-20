@@ -10,7 +10,7 @@ Symptom → cause → fix. Exception classes and handling are in [`SKILL.md` →
 
 ## Every call throws `MonoCloudException: Something went wrong.`
 
-**Cause:** no usable HTTP response reached the SDK, and it discards the original error. Typical reasons: DNS / TLS / connection failure or a blocking proxy; a domain with another scheme (only a lowercase `https://` prefix is recognized, so `http://acme…` is requested as `https://http//acme…`); Node < 18 without global `fetch` / `AbortSignal.timeout`; a negative or `NaN` `config.timeout`; a 2xx body that isn't JSON; or a custom fetcher that throws.
+**Cause:** no usable HTTP response reached the SDK, and it discards the original error. Typical reasons: DNS / TLS / connection failure or a blocking proxy; a domain with another scheme (only a lowercase `https://` prefix is recognized, so `http://acme…` is requested as `https://http//acme…`); a runtime without global `fetch` / `AbortSignal.timeout`; a response that sets a cookie, read through a `Headers` without `getSetCookie()` (an old runtime, or a polyfilled `Response` from a custom fetcher); a negative or `NaN` `config.timeout`; a 2xx body that isn't JSON; or a custom fetcher that throws.
 
 **Fix:** set the domain to `acme.us.monocloud.com` or `https://acme.us.monocloud.com`, check reachability with `curl -H "X-API-KEY: $MONOCLOUD_MANAGEMENT_API_KEY" "https://<tenant-host>/api/users?size=1"`, and to see the underlying error, temporarily pass a [custom fetcher](api-surface.md#custom-fetcher) that logs before rethrowing.
 
@@ -76,6 +76,10 @@ Map `errors` to your inputs rather than string-matching `e.message` (which embed
 
 The body is on `.result` (and paging info on `.pageData`); `.Data` / `.PageData` belong to the .NET SDK. Empty responses resolve with `result === null`.
 
+## `res.headers['set-cookie']` is not a string
+
+`headers` is a plain object, not a `Headers` instance (no `.get()`). Every value is a string except `set-cookie`, which is a `string[]` (one entry per cookie) or absent. Iterate it and forward each entry as its own `Set-Cookie` header.
+
 ## Patch calls don't do what you expected
 
 - **TypeScript rejects `audience` or `name`** ("Object literal may only specify known properties"): identifiers aren't part of `PatchApiResourceRequest`, `PatchApiScopeRequest`, `PatchScopeRequest` or `PatchClaimResourceRequest`. Delete and recreate to change them.
@@ -99,4 +103,4 @@ The body is on `.result` (and paging info on `.pageData`); `.Data` / `.PageData`
 node scripts/verify.js [project-dir]
 ```
 
-Run from the skill directory ([`scripts/verify.js`](../scripts/verify.js)). It checks the dependency, required env vars, the domain format, `MONOCLOUD_MANAGEMENT_TIMEOUT` parsing, public-prefixed or client-side use of the key, `new MonoCloudManagementClient(…)`, core-only imports, `.data` / `.PageData` reads, and calls to methods that don't exist on a resource client.
+Run from the skill directory ([`scripts/verify.js`](../scripts/verify.js)). It checks the dependency, the runtime's `fetch` / `AbortSignal.timeout` / `Headers.getSetCookie()`, required env vars, the domain format, `MONOCLOUD_MANAGEMENT_TIMEOUT` parsing, public-prefixed or client-side use of the key, `new MonoCloudManagementClient(…)`, core-only imports, `.data` / `.PageData` reads, `headers['set-cookie']` used as a string, and calls to methods that don't exist on a resource client.

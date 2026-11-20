@@ -1,6 +1,6 @@
 ---
 name: monocloud-management-js
-description: Use when calling the MonoCloud Management API from Node.js or TypeScript with `@monocloud/management`, creating `MonoCloudManagementClient` via the static `init()` factory (`domain`, `apiKey`, `config.timeout`, custom `fetcher`), calling its `users`, `clients`, `groups`, `resources`, `keys`, `logs`, `options`, `branding`, `networkZones` and `trustStores` clients (applications, API access policies, PKI/SPIFFE trust stores, sessions, grants and tokens), reading `.result` and paging via `MonoCloudPageResponse.pageData`, catching `MonoCloudException` subclasses (`MonoCloudNotFoundException`, `MonoCloudUnauthorizedException`, `MonoCloudForbiddenException`, `MonoCloudPaymentRequiredException`, `MonoCloudIdentityValidationException`) and their `errorCode` / `trace_id`, or troubleshooting `MONOCLOUD_MANAGEMENT_DOMAIN`, `MONOCLOUD_MANAGEMENT_API_KEY`, `MONOCLOUD_MANAGEMENT_TIMEOUT`, `Tenant Domain is required`, `Something went wrong.` and 401/402/403/422 errors.
+description: Use when calling the MonoCloud Management API from Node.js or TypeScript with `@monocloud/management`, creating `MonoCloudManagementClient` via the static `init()` factory (`domain`, `apiKey`, `config.timeout`, custom `fetcher`), calling its `users`, `clients`, `groups`, `resources`, `keys`, `logs`, `options`, `branding`, `networkZones` and `trustStores` clients (applications, API access policies, PKI/SPIFFE trust stores, sessions, grants and tokens), reading `.result` / `.headers` (`set-cookie` is a `string[]`) and paging via `MonoCloudPageResponse.pageData`, catching `MonoCloudException` subclasses (`MonoCloudNotFoundException`, `MonoCloudUnauthorizedException`, `MonoCloudForbiddenException`, `MonoCloudPaymentRequiredException`, `MonoCloudIdentityValidationException`) and their `errorCode` / `trace_id`, or troubleshooting `MONOCLOUD_MANAGEMENT_DOMAIN`, `MONOCLOUD_MANAGEMENT_API_KEY`, `MONOCLOUD_MANAGEMENT_TIMEOUT`, `Tenant Domain is required`, `Something went wrong.` and 401/402/403/422 errors.
 license: MIT
 ---
 
@@ -24,7 +24,7 @@ Check `package.json` for **`@monocloud/management`** before writing code. These 
 npm install @monocloud/management
 ```
 
-ESM and CommonJS builds, with types. `engines` allows Node `>= 11`, but the built-in transport uses global `fetch`, `Headers` and `AbortSignal.timeout`, so it needs Node 18+; elsewhere pass a [custom fetcher](#custom-fetcher).
+ESM and CommonJS builds, with types. `engines` allows Node `>= 11`, but the built-in transport uses global `fetch`, `Headers` (including `getSetCookie()`) and `AbortSignal.timeout` — run it on a current Node LTS (20+); elsewhere pass a [custom fetcher](#custom-fetcher).
 
 ## Configuration
 
@@ -89,7 +89,8 @@ class MonoCloudPageResponse<T> extends MonoCloudResponse<T> { pageData: PageMode
 interface PageModel { page_size: number; current_page: number; total_count: number; has_previous: boolean; has_next: boolean }
 ```
 
-- `pageData` is parsed from the `x-pagination` response header (zeros / `false` if it is missing). `headers` keys are lower-case.
+- `headers` keys are lower-case and values are strings, except `headers['set-cookie']`: a `string[]` with one entry per `Set-Cookie` header (absent when there is none), on paginated responses too. Forward each entry as its own `Set-Cookie` header; never join or split them (`Expires` dates contain commas).
+- `pageData` is parsed from the `x-pagination` response header (zeros / `false` if it is missing).
 - Empty responses (every `delete*`, several actions) resolve with `result === null`.
 - `MonoCloudPageResponse`, `PageModel` and `ProblemDetails` are core-only and not exported from `@monocloud/management`. Rely on inference, or derive them:
 
@@ -206,7 +207,7 @@ Request fields are gated too (consents, PAR/JAR, front-/back-channel logout, ref
 
 ## Custom fetcher
 
-`init(options?, fetcher?)` accepts `Fetcher = (input: string | URL, init?: RequestInit) => Promise<Response>`. A fetcher **replaces the whole transport**: the SDK then skips `domain` / `apiKey` validation and adds no base URL, `X-API-KEY` / `Content-Type` headers, or timeout. It is called with a path relative to `/api/` (e.g. `users?page=1&size=25`) and `{ method, body }` (`body` is a JSON string), and must return a WHATWG `Response`. Use it for retries, logging, proxies or tests — see the [example](references/api-surface.md#custom-fetcher). Errors it throws surface as `Something went wrong.` unless they are a `MonoCloudException` or named `TimeoutError`.
+`init(options?, fetcher?)` accepts `Fetcher = (input: string | URL, init?: RequestInit) => Promise<Response>`. A fetcher **replaces the whole transport**: the SDK then skips `domain` / `apiKey` validation and adds no base URL, `X-API-KEY` / `Content-Type` headers, or timeout. It is called with a path relative to `/api/` (e.g. `users?page=1&size=25`) and `{ method, body }` (`body` is a JSON string), and must return a WHATWG `Response` — the SDK reads cookies with `response.headers.getSetCookie()`, so a polyfilled `Response` without it fails with `Something went wrong.` whenever the response sets a cookie. Use it for retries, logging, proxies or tests — see the [example](references/api-surface.md#custom-fetcher). Errors it throws surface as `Something went wrong.` unless they are a `MonoCloudException` or named `TimeoutError`.
 
 ## Things that don't exist
 
@@ -224,7 +225,7 @@ Request fields are gated too (consents, PAR/JAR, front-/back-channel logout, ref
 node scripts/verify.js [project-dir]
 ```
 
-[`scripts/verify.js`](scripts/verify.js) checks the dependency, env vars (domain format, timeout parsing, public-prefixed keys), client construction, core-only imports, client-side usage, `.data` reads, and calls to methods that don't exist on a resource client.
+[`scripts/verify.js`](scripts/verify.js) checks the dependency and runtime, env vars (domain format, timeout parsing, public-prefixed keys), client construction, core-only imports, client-side usage, `.data` reads, `headers['set-cookie']` treated as a string, and calls to methods that don't exist on a resource client.
 
 ## References
 

@@ -1,6 +1,6 @@
 # API surface — `@monocloud/auth-react`
 
-Verified against `@monocloud/auth-react@0.2.9` (`monocloud/auth-js` @ `30d7d98`).
+Verified against `@monocloud/auth-react@0.2.10` (`monocloud/auth-js` @ `46242b0`).
 
 Single entry point (`exports: { ".": … }`), marked `'use client'`. There are no subpaths.
 
@@ -15,7 +15,7 @@ Single entry point (`exports: { ".": … }`), marked `'use client'`. There are n
 | Re-exported types | `MonoCloudWebJSClientOptions`, `DefaultAuthParams`, `Indicator`, `IStorage`, `SignInOptions`, `SignInSilentOptions`, `SignOutOptions`, `RefreshOptions`, `RefreshGrantOptions`, `GetTokensOptions`, `MonoCloudTokens`, `MonoCloudSession`, `MonoCloudUser`, `AccessToken`, `UserinfoResponse`, `IdTokenClaims`, `Address`, `Group`, `CallbackState`, `ApplicationState`, `PostCallback`, `OnSessionCreating`, `InteractionMode`, `AuthorizationParams`, `Authenticators`, `ClientAuthMethod`, `Prompt`, `DisplayOptions`, `ResponseTypes`, `ResponseModes`, `CodeChallengeMethod`, `SecurityAlgorithms`, `Jwk` |
 
 - `AuthState` here is the React state shape below — not the OIDC transaction `AuthState` (`state`, `nonce`, …) that `@monocloud/auth-web-js` exports.
-- Import from `@monocloud/auth-web-js` instead (same release): `MonoCloudOidcClient` (e.g. static `decodeJwt`), `/utils` helpers such as `isUserInGroup`, and lower-level types (`Jwks`, `IssuerMetadata`, `Tokens`, `CallbackParams`, `EndSessionParameters`, …).
+- Import from `@monocloud/auth-web-js` instead (same release): `MonoCloudOidcClient` (e.g. static `decodeJwt`), `/utils` helpers such as `isUserInGroup`, the `SessionChangeListener` type, and lower-level types (`Jwks`, `IssuerMetadata`, `Tokens`, `CallbackParams`, `EndSessionParameters`, …).
 - Client options, method semantics, token selection, storage keys and error messages are documented in the `monocloud-web-js` skill ([api-surface](../../monocloud-web-js/references/api-surface.md)); they apply unchanged to the client the provider builds.
 
 ## `<MonoCloudAuthProvider>`
@@ -32,9 +32,9 @@ Lifecycle:
 
 1. First render: `useState(() => new MonoCloudWebJSClient(clientOptions))` — one client per provider instance; later prop changes are ignored.
 2. Initial state: `{ isLoading: true, isAuthenticated: false }`.
-3. Mount effect, run once (a ref guard absorbs StrictMode's double invoke): `autoProcessCallback` → `processCallback()` then `syncSession()`; otherwise only `syncSession()`.
-4. `syncSession()` = `client.getSession()` → `{ isLoading: false, isAuthenticated: !!session, user: session?.user, session, error: undefined }`.
-5. A failed `processCallback()` sets `{ isLoading: false, isAuthenticated: false, user: undefined, session: undefined, error }` and rethrows to `<ProcessCallback>` (the automatic run swallows it).
+3. Session effect: `client.onSessionChange(session => setState({ isLoading: false, isAuthenticated: !!session, user: session?.user, session, error: undefined }))`, unsubscribed on unmount. It delivers the stored session once — after any in-flight callback exchange settles — then every session the client writes, whoever triggered it: `useAuth()` actions, `<ProcessCallback>`, or direct calls on the `useClient()` client.
+4. Mount effect, run once (a ref guard absorbs StrictMode's double invoke): with `autoProcessCallback`, runs the provider's `processCallback` and swallows its rejection (the error stays in state).
+5. The provider's `processCallback` (also behind `<ProcessCallback>`): `isLoading: true` → `client.processCallback()` → `isLoading: false`. On failure: `{ ...previous, isLoading: false, error }` — the current session is kept — then rethrows. Concurrent runs share one code exchange.
 6. Provides three contexts: the client (`useClient`), the provider's `processCallback` (`<ProcessCallback>`), and state + actions (`useAuth`).
 
 Without a `postCallback` prop the web-js default applies (strip query/hash; full page load to a same-origin `returnUrl`).
@@ -64,14 +64,13 @@ interface MonoCloudAuth extends AuthState {
 
 | Action | Before | On success | On failure |
 | --- | --- | --- | --- |
-| `signIn` | `isLoading: true` | `syncSession()` | `{ ...previous, isLoading: false, error }` — resolves, never rejects |
-| `signOut` | `isLoading: true` | `syncSession()` | same as `signIn` |
-| `signInSilent` | — | `syncSession()`; returns the session | rejects; state unchanged |
-| `refreshSession`, `refetchUserInfo` | — | `syncSession()` | rejects |
-| `getTokens` | — | `syncSession()`; returns the tokens | rejects |
+| `signIn` | `isLoading: true` | `isLoading: false` | `{ ...previous, isLoading: false, error }` — resolves, never rejects |
+| `signOut` | `isLoading: true` | `isLoading: false` | same as `signIn` |
+| `signInSilent`, `refreshSession`, `refetchUserInfo`, `getTokens` | — | the client call's result (the session for `signInSilent`, the tokens for `getTokens`) | rejects; state unchanged |
 
-- Actions are `useCallback`-memoized and stable. Each successful action publishes a new state object with freshly parsed `user` / `session` objects.
-- A redirect `signIn` / `signOut` resolves (and syncs) just before the page unloads.
+- `isAuthenticated`, `user` and `session` change only through the session effect: every write publishes freshly parsed `user` / `session` objects, sets `isLoading: false` and clears `error`. Calls that write nothing — `getTokens()` returning a stored token, a failed refresh — leave state untouched and don't re-render.
+- Actions are `useCallback`-memoized and stable.
+- A redirect `signIn` / `signOut` resolves just before the page unloads; `signOut` clears the local session — and so the context — first.
 - Outside the provider: `MonoCloudJsError: useAuth() can only be used inside a <MonoCloudAuthProvider>...</MonoCloudAuthProvider>.`
 
 ## `useClient()`
@@ -80,7 +79,7 @@ interface MonoCloudAuth extends AuthState {
 function useClient(): MonoCloudWebJSClient;
 ```
 
-Returns the provider's client. Direct calls don't update context — use it for operations `useAuth()` lacks, such as `client.oidcClient.revokeToken(token, 'access_token' | 'refresh_token')` (the stored session keeps the revoked token until it expires or is refreshed). Outside the provider: `MonoCloudJsError: useClient() can only be used inside a <MonoCloudAuthProvider>...</MonoCloudAuthProvider>.`
+Returns the provider's client, for operations `useAuth()` lacks — such as `client.oidcClient.revokeToken(token, 'access_token' | 'refresh_token')` (the stored session keeps the revoked token until it expires or is refreshed) or an extra `client.onSessionChange()` subscription. Session writes made through it still reach `useAuth()` via the provider's subscription; only the hook's `signIn` / `signOut` set `isLoading` and turn failures into `error` (direct calls reject instead). Outside the provider: `MonoCloudJsError: useClient() can only be used inside a <MonoCloudAuthProvider>...</MonoCloudAuthProvider>.`
 
 ## Buttons
 
@@ -135,7 +134,7 @@ interface ProcessCallbackProps {
 }
 ```
 
-On mount (once, StrictMode-guarded) it runs the provider's `processCallback` — `isLoading: true`, `client.processCallback()`, `syncSession()` — and renders `loading`, then `children` on success or `error` on failure (nothing if `error` is omitted). It never navigates. Outside the provider: `MonoCloudJsError: <ProcessCallback /> can only be used inside a <MonoCloudAuthProvider>...</MonoCloudAuthProvider>.`
+On mount (once, StrictMode-guarded) it runs the provider's `processCallback` — `isLoading: true`, `client.processCallback()`, `isLoading: false`, with the session arriving through the provider's subscription — and renders `loading`, then `children` on success or `error` on failure (nothing if `error` is omitted). If `autoProcessCallback` is also on, both runs share the one exchange. It never navigates. Outside the provider: `MonoCloudJsError: <ProcessCallback /> can only be used inside a <MonoCloudAuthProvider>...</MonoCloudAuthProvider>.`
 
 ## Errors
 

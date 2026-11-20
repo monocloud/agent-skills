@@ -16,7 +16,7 @@ const EXPORTS = new Set([
   'MonoCloudAuthBaseError', 'MonoCloudOPError', 'MonoCloudValidationError', 'MonoCloudTokenError',
   'MonoCloudHttpError', 'MonoCloudJsError',
   'MonoCloudWebJSClientOptions', 'DefaultAuthParams', 'Indicator', 'IStorage', 'InteractionMode',
-  'ApplicationState', 'OnSessionCreating', 'PostCallback', 'CallbackState', 'SignInOptions',
+  'ApplicationState', 'OnSessionCreating', 'PostCallback', 'CallbackState', 'SessionChangeListener', 'SignInOptions',
   'SignInSilentOptions', 'SignOutOptions', 'RefreshOptions', 'GetTokensOptions', 'MonoCloudTokens',
   'AccessToken', 'AuthenticateOptions', 'ClientAuthMethod', 'MonoCloudClientOptionsBase',
   'PushedAuthorizationParams', 'RefreshSessionOptions', 'AuthState', 'Authenticators',

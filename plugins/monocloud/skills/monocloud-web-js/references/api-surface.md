@@ -1,6 +1,6 @@
 # API surface — `@monocloud/auth-web-js`
 
-Verified against `@monocloud/auth-web-js@0.2.9` (`monocloud/auth-js` @ `30d7d98`).
+Verified against `@monocloud/auth-web-js@0.2.10` (`monocloud/auth-js` @ `46242b0`).
 
 ## Exports
 
@@ -10,7 +10,7 @@ Verified against `@monocloud/auth-web-js@0.2.9` (`monocloud/auth-js` @ `30d7d98`
 | --- | --- |
 | Classes | `MonoCloudWebJSClient`, `MonoCloudOidcClient` (low-level OIDC client), `LocalStorage`, `SessionStorage`, `MemoryStorage` |
 | Errors | `MonoCloudAuthBaseError`, `MonoCloudOPError`, `MonoCloudValidationError`, `MonoCloudTokenError`, `MonoCloudHttpError`, `MonoCloudJsError` |
-| Types (this package) | `MonoCloudWebJSClientOptions`, `DefaultAuthParams`, `Indicator`, `IStorage`, `InteractionMode`, `ApplicationState`, `OnSessionCreating`, `PostCallback`, `CallbackState`, `SignInOptions`, `SignInSilentOptions`, `SignOutOptions`, `RefreshOptions`, `GetTokensOptions`, `MonoCloudTokens` |
+| Types (this package) | `MonoCloudWebJSClientOptions`, `DefaultAuthParams`, `Indicator`, `IStorage`, `InteractionMode`, `ApplicationState`, `OnSessionCreating`, `PostCallback`, `CallbackState`, `SessionChangeListener`, `SignInOptions`, `SignInSilentOptions`, `SignOutOptions`, `RefreshOptions`, `GetTokensOptions`, `MonoCloudTokens` |
 | Types (from `@monocloud/auth-core`) | `MonoCloudSession`, `MonoCloudUser`, `AccessToken`, `IdTokenClaims`, `UserinfoResponse`, `Address`, `Group`, `AuthState`, `AuthorizationParams`, `Authenticators`, `CallbackParams`, `ClientAuthMethod`, `CodeChallengeMethod`, `DisplayOptions`, `EndSessionParameters`, `IssuerMetadata`, `Jwk`, `Jwks`, `JwsHeaderParameters`, `MtlsEndpointAliases`, `ParResponse`, `Prompt`, `PushedAuthorizationParams`, `ResponseModes`, `ResponseTypes`, `SecurityAlgorithms`, `Tokens`, `AuthenticateOptions`, `MonoCloudClientOptionsBase`, `RefreshGrantOptions`, `RefreshSessionOptions`, `RefetchUserInfoOptions` |
 
 Not exported here: `MonoCloudRawResponse`, `MonoCloudTokenErrorCode`, `JwtClaims`, `IsUserInGroupOptions`, `MonoCloudOidcBackendClient`. No default export.
@@ -39,12 +39,13 @@ class MonoCloudWebJSClient {
   refetchUserInfo(): Promise<void>;
   getTokens(options?: GetTokensOptions): Promise<MonoCloudTokens>;
   getSession(): Promise<MonoCloudSession | undefined>;
+  onSessionChange(listener: SessionChangeListener): () => void; // returns unsubscribe
 }
 ```
 
 | Method | Behavior | Throws (message) |
 | --- | --- | --- |
-| `processCallback()` | Reads and clears the pending state. Sign-in state on `appUrl + callbackPath`: validates, exchanges the code (or reads the fragment for implicit types), stores the session, awaits `postCallback`. Sign-out state on `appUrl + signOutPath`: clears the session, checks `state`, awaits `postCallback`. Anything else: no-op. In an SDK-opened popup/iframe it posts the URL to the opener/parent instead. | `MonoCloudValidationError` (`Sign in callback states mismatch`, `Sign out states mismatch`, `Response is missing 'code'`, …), `MonoCloudOPError` (`error` in the callback URL), `MonoCloudTokenError`, `MonoCloudHttpError` |
+| `processCallback()` | Reads and clears the pending state. Sign-in state on `appUrl + callbackPath`: validates, exchanges the code (or reads the fragment for implicit types), stores the session, awaits `postCallback`. Sign-out state on `appUrl + signOutPath`: clears the session, checks `state`, awaits `postCallback`. Anything else: no-op. A call made while an exchange is in flight shares it and settles or rejects with it. Settles only after every `onSessionChange` listener subscribed so far has received its first session. In an SDK-opened popup/iframe it posts the URL to the opener/parent instead. | `MonoCloudValidationError` (`Sign in callback states mismatch`, `Sign out states mismatch`, `Response is missing 'code'`, …), `MonoCloudOPError` (`error` in the callback URL), `MonoCloudTokenError`, `MonoCloudHttpError` |
 | `signIn(o?)` | Builds the authorize request (PKCE `S256`, `state`, `nonce`). Redirect: saves pending state, `location.assign()`, resolves before unload. Popup: opens `about:blank` synchronously, completes the flow in this page, stores the session, awaits `postCallback`. | `MonoCloudJsError` (`Cannot start a redirect sign-in from inside an iframe: …`, `Could not open popup`, `Window closed by user`, `Authentication window timed out`); popup mode also the callback errors above |
 | `signOut(o?)` | Clears the local session first. Non-federated: done. Federated: end-session URL with `id_token_hint` (`o.idTokenHint` ?? session ID token), `post_logout_redirect_uri` (`o.postLogoutRedirectUri` ?? `appUrl + signOutPath`) and `state`, by redirect or popup. | `MonoCloudJsError` (`Cannot start a redirect sign-out from inside an iframe: …` — thrown before clearing; popup errors as above), `MonoCloudValidationError` (`Sign out states mismatch`) |
 | `signInSilent(o?)` | Hidden iframe, `prompt=none`; resolves to the stored session. A failure leaves the existing session as is. | `MonoCloudOPError` (`login_required`, `interaction_required`, …), `MonoCloudJsError` (`Cannot create iframe in a cross-origin-isolated context`, `Authentication window timed out`) |
@@ -52,6 +53,20 @@ class MonoCloudWebJSClient {
 | `refetchUserInfo()` | UserInfo with the stored default access token (matching `defaultAuthParams.resource` and the session's `authorizedScopes`; not refreshed), merged into `session.user`. | `MonoCloudValidationError` (`Ensure the user is authenticated before refetching userinfo`, `Default token not found`, `Fetching userinfo requires the openid scope`), `MonoCloudTokenError` (UserInfo 401/403) |
 | `getTokens(o?)` | Returns a stored access token, refreshing first when none matches, it expires within 30 s, or `o.forceRefresh`. See [Token selection](#token-selection-in-gettokens). | `MonoCloudValidationError` (`Session does not exist`, `Session does not contain refresh token`), refresh-grant errors |
 | `getSession()` | Reads and parses the stored session; never refreshes or validates. | storage errors; `SyntaxError` for a corrupted stored value |
+| `onSessionChange(listener)` | Subscribes to the stored session; returns a function that removes the listener. See [below](#onsessionchange). | never — listener and storage errors are logged |
+
+### `onSessionChange()`
+
+```ts
+const unsubscribe = client.onSessionChange(session => render(session?.user)); // session: MonoCloudSession | undefined
+```
+
+- **First call:** the session currently in storage, delivered asynchronously (never during `onSessionChange()` itself). If a write is notified while that read is pending, the listener gets only the write. A redirect exchange in flight is awaited first: a subscription made in the same tick as `processCallback()` gets the exchange's result, or — if the exchange fails — the stored session once it settles.
+- **Then:** every session this client writes, in write order — sign-in in any mode (including its callback), sign-out (`undefined`, also on the sign-out callback), `refreshSession()`, `refetchUserInfo()`, and `getTokens()` when it refreshes. Notification happens right after the write, before `postCallback` runs.
+- **No notification** when nothing is written: `getTokens()` returning a stored token, a failed refresh, `processCallback()` with nothing pending.
+- **Scope:** only this client instance's writes in this tab. Other tabs sharing `LocalStorage`, and other client instances, don't notify it (listen for the window `storage` event on `mc.session.<clientId>[.<sessionKey>]` for cross-tab changes).
+- **Errors:** a throwing listener is caught and logged (`console.error`) without affecting the write, the action that wrote, or other listeners. A stored session that can't be read is logged and delivered as `undefined`.
+- Each call is a separate subscription — the same function subscribed twice is called twice; each returned function removes only its own subscription, including a still-pending first delivery.
 
 ### Token selection in `getTokens()`
 
@@ -222,6 +237,7 @@ interface IStorage {
 
 ```ts
 type PostCallback = (state: CallbackState) => Promise<void> | void;
+type SessionChangeListener = (session: MonoCloudSession | undefined) => void;
 
 interface CallbackState extends Partial<AuthState> {  // AuthState: state, nonce, codeVerifier?, maxAge?, resource?, scopes
   mode: 'popup' | 'redirect' | 'silent';
@@ -239,7 +255,7 @@ type OnSessionCreating = (
 ) => Promise<void> | void;
 ```
 
-- `postCallback` runs in the main window, and is awaited, after: redirect sign-in (via `processCallback()`), popup and silent sign-in, redirect and popup federated sign-out. Never after a non-federated sign-out or a refresh.
+- `postCallback` runs in the main window, and is awaited, after: redirect sign-in (via `processCallback()`), popup and silent sign-in, redirect and popup federated sign-out — once the session write is stored and `onSessionChange` listeners have been notified. Never after a non-federated sign-out or a refresh.
 - Default `postCallback`: no `returnUrl` → strip query and hash with `history.replaceState`; `returnUrl` resolving to `appUrl`'s origin → `window.location.href = …` (full load, logging a warning about `MemoryStorage`); other origins → `console.warn('Ignoring returnUrl "…" because it resolves to a different origin than appUrl.')`, no navigation.
 - `onSessionCreating` runs before each session write that builds a session: sign-in (all modes), `refreshSession()`, the refresh inside `getTokens()`, and `refetchUserInfo()` (with `idToken` undefined).
 

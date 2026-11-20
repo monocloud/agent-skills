@@ -1,6 +1,6 @@
 ---
 name: monocloud-web-js
-description: Use when integrating MonoCloud authentication into a vanilla JavaScript / TypeScript browser app or SPA — installing or configuring `@monocloud/auth-web-js`, constructing `MonoCloudWebJSClient` (`tenantDomain`, `clientId`, `appUrl`, `callbackPath`, `defaultAuthParams`, `resources`), wiring `processCallback()` at startup, calling `signIn()` / `signOut()` / `signInSilent()` / `refreshSession()` / `refetchUserInfo()` / `getTokens()` / `getSession()`, popup vs redirect vs silent (iframe) modes, `LocalStorage` / `SessionStorage` / `MemoryStorage` / custom `IStorage`, router integration via `postCallback`, `onSessionCreating`, or troubleshooting callback URL mismatches, `Could not open popup`, `Window closed by user`, `Authentication window timed out`, cross-origin-isolated iframes, `login_required` from silent sign-in, `Sign in callback states mismatch`, `Session does not contain refresh token`, or `MonoCloudOPError` / `MonoCloudTokenError` / `MonoCloudJsError`.
+description: Use when integrating MonoCloud authentication into a vanilla JavaScript / TypeScript browser app or SPA — installing or configuring `@monocloud/auth-web-js`, constructing `MonoCloudWebJSClient` (`tenantDomain`, `clientId`, `appUrl`, `callbackPath`, `defaultAuthParams`, `resources`), wiring `processCallback()` at startup, calling `signIn()` / `signOut()` / `signInSilent()` / `refreshSession()` / `refetchUserInfo()` / `getTokens()` / `getSession()` / `onSessionChange()`, popup vs redirect vs silent (iframe) modes, `LocalStorage` / `SessionStorage` / `MemoryStorage` / custom `IStorage`, router integration via `postCallback`, `onSessionCreating`, or troubleshooting callback URL mismatches, `Could not open popup`, `Window closed by user`, `Authentication window timed out`, cross-origin-isolated iframes, `login_required` from silent sign-in, `Sign in callback states mismatch`, `Session does not contain refresh token`, or `MonoCloudOPError` / `MonoCloudTokenError` / `MonoCloudJsError`.
 license: MIT
 ---
 
@@ -56,21 +56,18 @@ export const client = new MonoCloudWebJSClient({
 // src/main.ts
 import { client } from './auth';
 
-async function start() {
-  await client.processCallback();             // completes a returning sign-in / sign-out; otherwise a no-op
-  const session = await client.getSession();  // MonoCloudSession | undefined — reads storage, never refreshes
-  renderUser(session?.user);                  // your UI
-}
+// Same tick: the stored session (or a returning callback's result), then every later sign-in, sign-out and refresh.
+client.onSessionChange(session => renderUser(session?.user)); // your UI; undefined → signed out
+client.processCallback().catch(console.error);                // completes a returning sign-in / sign-out; otherwise a no-op
 
 document.getElementById('sign-in')!.addEventListener('click', () => client.signIn()); // redirect
-document.getElementById('sign-in-popup')!.addEventListener('click', async () => {
-  await client.signIn({ mode: 'popup' });     // must start inside the click handler, before any other await
-  renderUser((await client.getSession())?.user);
+document.getElementById('sign-in-popup')!.addEventListener('click', () => {
+  client.signIn({ mode: 'popup' }).catch(console.error); // must start inside the click handler, before any other await
 });
 document.getElementById('sign-out')!.addEventListener('click', () => client.signOut()); // federated
-
-start();
 ```
+
+`getSession()` is a one-off read of storage (`MonoCloudSession | undefined`; never refreshes) — use it inside functions, and `onSessionChange()` to keep UI current.
 
 ## Constructor options
 
@@ -102,7 +99,7 @@ Also: `filteredIdTokenClaims`, `jwksCacheDuration`, `metadataCacheDuration`, `cl
 
 ## `processCallback()` — every page load
 
-Call it unconditionally before rendering; don't dispatch on the route yourself. It reads and clears the pending-flow state (`mc.state.<clientId>` in `sessionStorage`) and, when the URL is `appUrl + callbackPath` (sign-in) or `appUrl + signOutPath` (sign-out), completes that flow: checks `state`, exchanges the code, validates the ID token, stores the session, then awaits `postCallback`. With nothing pending it does nothing.
+Call it unconditionally before rendering; don't dispatch on the route yourself. It reads and clears the pending-flow state (`mc.state.<clientId>` in `sessionStorage`) and, when the URL is `appUrl + callbackPath` (sign-in) or `appUrl + signOutPath` (sign-out), completes that flow: checks `state`, exchanges the code, validates the ID token, stores the session (notifying `onSessionChange` listeners), then awaits `postCallback`. With nothing pending it does nothing. A second call while the exchange is in flight shares it instead of starting another.
 
 Inside the popup or hidden iframe the SDK opened, it instead posts the URL back to the opening window and returns — so the page at `callbackPath` / `signOutPath` must load your app and call `processCallback()`.
 
@@ -150,6 +147,15 @@ await fetch('https://api.example.com/data', { headers: { Authorization: `Bearer 
 - `refetchUserInfo()` — calls UserInfo with the stored default access token (not refreshed first) and merges the result into `session.user`.
 - `signInSilent`, `refreshSession`, `refetchUserInfo` and `getTokens` share one lock per client: identical concurrent calls in a tab share a promise, and calls across tabs run one at a time.
 
+## Session changes (`onSessionChange`)
+
+```ts
+const unsubscribe = client.onSessionChange(session => renderUser(session?.user));
+unsubscribe(); // when the view is torn down
+```
+
+The listener (`SessionChangeListener`) gets the stored session once, asynchronously, then every session this client writes — sign-in in any mode, sign-out (`undefined`), `refreshSession()`, `refetchUserInfo()`, a refreshing `getTokens()` — in write order and before `postCallback`. Calls that write nothing don't notify. It sees only this client instance's writes in this tab; other tabs sharing `LocalStorage` don't trigger it. A throwing listener is logged and never breaks the action. Details: [API surface](references/api-surface.md#onsessionchange).
+
 ## Storage
 
 | Adapter | Backed by | Lifetime |
@@ -163,7 +169,7 @@ The session lives under `mc.session.<clientId>[.<sessionKey>]`. Pending-flow sta
 
 ## Router integration (`postCallback`)
 
-After a completed sign-in or federated sign-out, the SDK awaits `postCallback(state)` in the main window. The default: no `returnUrl` → removes the query string and hash (`history.replaceState`, no reload); `returnUrl` on `appUrl`'s origin → full-page navigation to it (another origin is ignored with a `console.warn`).
+After a completed sign-in or federated sign-out, the SDK awaits `postCallback(state)` in the main window — once the session is stored and `onSessionChange` listeners have run. The default: no `returnUrl` → removes the query string and hash (`history.replaceState`, no reload); `returnUrl` on `appUrl`'s origin → full-page navigation to it (another origin is ignored with a `console.warn`).
 
 A custom `postCallback` replaces that behavior entirely, and it also runs after **popup and silent** sign-ins and popup sign-outs — check `state.mode` before navigating:
 
@@ -208,9 +214,10 @@ Errors built from an HTTP response carry `.raw` (`{ status, statusText, headers,
 8. **`MemoryStorage` with the default `postCallback` and a `returnUrl`** — the full page load wipes the session it just stored.
 9. **`appUrl` ≠ the page's real origin** (`localhost` vs `127.0.0.1`, proxies) — popup/iframe messages are dropped and redirect callbacks find no pending state.
 10. **A `clientSecret` in browser code** — it ships in the bundle; SPA clients are public and rely on PKCE.
+11. **Rendering once from `getSession()`** — later popup sign-ins, refreshes and sign-outs never reach the UI; render from `onSessionChange()`.
 
 ## Verify and go deeper
 
 - [`scripts/verify.js`](scripts/verify.js) — run `node scripts/verify.js [project-dir]` from this skill's folder: checks the dependency, named imports and subpaths against the real exports, `processCallback()` wiring, leftover placeholders, `clientSecret`, browser-exposed secrets in `.env*`, Vite env usage, `MemoryStorage` and `offline_access`.
-- [`references/api-surface.md`](references/api-surface.md) — every export, option, method (with the messages it throws), token selection, storage keys, hooks, `oidcClient`, error classes.
+- [`references/api-surface.md`](references/api-surface.md) — every export, option, method (with the messages it throws), `onSessionChange()` delivery rules, token selection, storage keys, hooks, `oidcClient`, error classes.
 - [`references/troubleshooting.md`](references/troubleshooting.md) — symptom → cause → fix, including exact error strings.
