@@ -223,7 +223,7 @@ createRoot(document.getElementById('root')!).render(
 );
 ```
 
-- With `autoProcessCallback={false}` nothing else processes callbacks: every path MonoCloud returns to (`callbackPath` and `signOutPath`; popup and silent flows land there too) must render `<ProcessCallback>`.
+- With `autoProcessCallback={false}` nothing else processes callbacks: every path MonoCloud returns to (`callbackPath` and `signOutPath`; popup and silent flows land there too) must render `<ProcessCallback>`. On a redirect callback URL the provider's first session waits for it, so `isLoading` stays `true` until it runs — never render that route only once `isLoading` is `false`.
 - With `autoProcessCallback` on, `<ProcessCallback>` is optional; if both run, they share the one code exchange.
 - `<ProcessCallback>` doesn't navigate — without a `postCallback` that does, the user stays on the callback page.
 
@@ -275,7 +275,7 @@ Re-exported from `@monocloud/auth-web-js` (same classes, so `instanceof` works a
 1. **Hooks or `<ProcessCallback>` outside `<MonoCloudAuthProvider>`** — throws `MonoCloudJsError`.
 2. **`try { await signIn() } catch`** — never catches; read `error` from `useAuth()`.
 3. **Effects that depend on `user` / `session` and write the session** (`refetchUserInfo()`, `refreshSession()`, `signInSilent()`, `getTokens({ forceRefresh: true })`) — each write publishes new objects, so the effect re-runs forever. Depend on `isAuthenticated` or `user?.sub`.
-4. **`autoProcessCallback={false}` without `<ProcessCallback>`** on the return routes — callbacks never complete.
+4. **`autoProcessCallback={false}` without `<ProcessCallback>`** on the return routes, or with it behind an `isLoading` gate — callbacks never complete and `isLoading` stays `true` on the callback URL.
 5. **Changing provider props at runtime** — ignored; remount with `key`.
 6. **Using this package in Next.js** — use `@monocloud/auth-nextjs`.
 7. **No `offline_access`**, or **scopes without `openid`** — no refresh token / no profile.

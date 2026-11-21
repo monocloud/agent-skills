@@ -1,6 +1,6 @@
 # API surface — `@monocloud/auth-nextjs`
 
-Verified against `@monocloud/auth-nextjs@0.2.10` (`monocloud/auth-js` @ `30d7d98`).
+Verified against `@monocloud/auth-nextjs@0.2.11` (`monocloud/auth-js` @ `3cfea90`).
 
 Every export per subpath, with condensed signatures. Protection-helper option types and behavior are in [protecting.md](protecting.md).
 

@@ -291,7 +291,7 @@ if (!files.length) {
     if (providerFound) pass('<MonoCloudAuthProvider> is rendered.');
     else warn('No <MonoCloudAuthProvider> found — wrap the app root so useAuth() / useClient() / components work.');
   }
-  if (autoProcessOff && !processCallbackComponent) warn('autoProcessCallback={false} is set but no <ProcessCallback> is rendered — sign-in/sign-out callbacks will never complete.');
+  if (autoProcessOff && !processCallbackComponent) warn('autoProcessCallback={false} is set but no <ProcessCallback> is rendered — sign-in/sign-out callbacks will never complete, and isLoading stays true on a redirect callback URL.');
   if (loopingEffects.length) warn(`useEffect with user/session dependencies writes the session (refetchUserInfo / refreshSession / signInSilent / getTokens({ forceRefresh: true })) in ${list(loopingEffects)} — each write publishes new user/session objects, so the effect loops. Depend on isAuthenticated or user?.sub.`);
   if (popupEffects.length) warn(`Popup sign-in started inside useEffect in ${list(popupEffects)} — browsers block popups not opened from a click; trigger it from an event handler or use <SignIn mode="popup">.`);
   if (serverComponentFiles.length) warn(`Hooks from ${PKG} in app/ files without "use client": ${list(serverComponentFiles)}.`);

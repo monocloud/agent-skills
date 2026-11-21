@@ -56,7 +56,7 @@ export const client = new MonoCloudWebJSClient({
 // src/main.ts
 import { client } from './auth';
 
-// Same tick: the stored session (or a returning callback's result), then every later sign-in, sign-out and refresh.
+// The stored session (on a callback URL: the callback's result, once processCallback() has run), then every later sign-in, sign-out and refresh.
 client.onSessionChange(session => renderUser(session?.user)); // your UI; undefined → signed out
 client.processCallback().catch(console.error);                // completes a returning sign-in / sign-out; otherwise a no-op
 
@@ -154,7 +154,7 @@ const unsubscribe = client.onSessionChange(session => renderUser(session?.user))
 unsubscribe(); // when the view is torn down
 ```
 
-The listener (`SessionChangeListener`) gets the stored session once, asynchronously, then every session this client writes — sign-in in any mode, sign-out (`undefined`), `refreshSession()`, `refetchUserInfo()`, a refreshing `getTokens()` — in write order and before `postCallback`. Calls that write nothing don't notify. It sees only this client instance's writes in this tab; other tabs sharing `LocalStorage` don't trigger it. A throwing listener is logged and never breaks the action. Details: [API surface](references/api-surface.md#onsessionchange).
+The listener (`SessionChangeListener`) gets the stored session once, asynchronously, then every session this client writes — sign-in in any mode, sign-out (`undefined`), `refreshSession()`, `refetchUserInfo()`, a refreshing `getTokens()` — in write order and before `postCallback`. On a redirect callback URL the first value waits until `processCallback()` has run there — a page that never calls it never gets one. Calls that write nothing don't notify. It sees only this client instance's writes in this tab; other tabs sharing `LocalStorage` don't trigger it. A throwing listener is logged and never breaks the action. Details: [API surface](references/api-surface.md#onsessionchange).
 
 ## Storage
 
@@ -204,7 +204,7 @@ Errors built from an HTTP response carry `.raw` (`{ status, statusText, headers,
 
 ## Common pitfalls
 
-1. **`processCallback()` not called on every load** (or gated on a route) — returning sign-ins never complete.
+1. **`processCallback()` not called on every load** (or gated on a route) — returning sign-ins never complete, and `onSessionChange()` listeners on the callback URL never get a first value.
 2. **Dashboard URLs differ from what the SDK sends** (`appUrl + callbackPath`, trailing `/` stripped), or the origin is missing from Cross-Origin URLs — MonoCloud rejects the redirect, or browser calls fail with a status-less `MonoCloudHttpError`.
 3. **`scopes` set without `openid`** — the `openid profile email` default disappears once any scope is configured; the session gets no ID token or profile.
 4. **No `offline_access`** — no refresh token, so `getTokens()` fails once the access token expires.

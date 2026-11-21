@@ -1,6 +1,6 @@
 # API surface — `@monocloud/auth-react`
 
-Verified against `@monocloud/auth-react@0.2.10` (`monocloud/auth-js` @ `46242b0`).
+Verified against `@monocloud/auth-react@0.2.11` (`monocloud/auth-js` @ `3cfea90`).
 
 Single entry point (`exports: { ".": … }`), marked `'use client'`. There are no subpaths.
 
@@ -32,7 +32,7 @@ Lifecycle:
 
 1. First render: `useState(() => new MonoCloudWebJSClient(clientOptions))` — one client per provider instance; later prop changes are ignored.
 2. Initial state: `{ isLoading: true, isAuthenticated: false }`.
-3. Session effect: `client.onSessionChange(session => setState({ isLoading: false, isAuthenticated: !!session, user: session?.user, session, error: undefined }))`, unsubscribed on unmount. It delivers the stored session once — after any in-flight callback exchange settles — then every session the client writes, whoever triggered it: `useAuth()` actions, `<ProcessCallback>`, or direct calls on the `useClient()` client.
+3. Session effect: `client.onSessionChange(session => setState({ isLoading: false, isAuthenticated: !!session, user: session?.user, session, error: undefined }))`, unsubscribed on unmount. It delivers the stored session once — after any in-flight callback exchange settles, and on a redirect callback URL only once `processCallback()` has run (until then `isLoading` stays `true`) — then every session the client writes, whoever triggered it: `useAuth()` actions, `<ProcessCallback>`, or direct calls on the `useClient()` client.
 4. Mount effect, run once (a ref guard absorbs StrictMode's double invoke): with `autoProcessCallback`, runs the provider's `processCallback` and swallows its rejection (the error stays in state).
 5. The provider's `processCallback` (also behind `<ProcessCallback>`): `isLoading: true` → `client.processCallback()` → `isLoading: false`. On failure: `{ ...previous, isLoading: false, error }` — the current session is kept — then rethrows. Concurrent runs share one code exchange.
 6. Provides three contexts: the client (`useClient`), the provider's `processCallback` (`<ProcessCallback>`), and state + actions (`useAuth`).
@@ -122,7 +122,7 @@ error || !isAuthenticated || !user → fallback || null
 isUserInGroup(user, groups, groupsClaim, matchAllGroups) ? children : onGroupAccessDenied(user)
 ```
 
-`isUserInGroup` (from `@monocloud/auth-web-js/utils`) compares each required group with the claim's entries — strings by equality, `{ id, name }` objects by `id` or `name`. An empty `groups` array allows everyone.
+`isUserInGroup` (from `@monocloud/auth-web-js/utils`) compares each required group with the claim's entries — strings by equality, `{ id, name }` objects by `id` or `name`. An empty `groups` array allows everyone; in plain JS a bare string counts as one group.
 
 ## `<ProcessCallback>`
 

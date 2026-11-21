@@ -1,6 +1,6 @@
 # API surface — `@monocloud/auth-web-js`
 
-Verified against `@monocloud/auth-web-js@0.2.10` (`monocloud/auth-js` @ `46242b0`).
+Verified against `@monocloud/auth-web-js@0.2.11` (`monocloud/auth-js` @ `3cfea90`).
 
 ## Exports
 
@@ -19,7 +19,7 @@ Not exported here: `MonoCloudRawResponse`, `MonoCloudTokenErrorCode`, `JwtClaims
 
 | Import | Contents |
 | --- | --- |
-| `@monocloud/auth-web-js/utils` | `isUserInGroup(user, groups, groupsClaim = 'groups', matchAll = false)`, `parseCallbackParams`, `generateState`, `generateNonce`, `generatePKCE`, `encrypt` / `decrypt`, `encryptSession` / `decryptSession`, `encryptAuthState` / `decryptAuthState` |
+| `@monocloud/auth-web-js/utils` | `isUserInGroup(user, groups: string | string[], groupsClaim = 'groups', matchAll = false)` (a string is one group; `[]` passes everyone), `parseCallbackParams`, `generateState`, `generateNonce`, `generatePKCE`, `encrypt` / `decrypt`, `encryptSession` / `decryptSession`, `encryptAuthState` / `decryptAuthState` |
 | `@monocloud/auth-web-js/internal` | SDK-internal helpers — not for application code |
 
 No other subpaths exist (`/client`, `/react`, `/browser` are not real).
@@ -61,7 +61,7 @@ class MonoCloudWebJSClient {
 const unsubscribe = client.onSessionChange(session => render(session?.user)); // session: MonoCloudSession | undefined
 ```
 
-- **First call:** the session currently in storage, delivered asynchronously (never during `onSessionChange()` itself). If a write is notified while that read is pending, the listener gets only the write. A redirect exchange in flight is awaited first: a subscription made in the same tick as `processCallback()` gets the exchange's result, or — if the exchange fails — the stored session once it settles.
+- **First call:** the session currently in storage, delivered asynchronously (never during `onSessionChange()` itself). If a write is notified while that read is pending, the listener gets only the write. On a redirect callback that `processCallback()` hasn't handled yet (main window, `appUrl + callbackPath` / `signOutPath` carrying the pending flow's `state`), the first value waits until `processCallback()` has run — subscribing before or after calling it makes no difference — and is then the exchange's result, or the stored session if the exchange failed (delivered before `processCallback()` rejects). If `processCallback()` is never called on that page, the first value never arrives.
 - **Then:** every session this client writes, in write order — sign-in in any mode (including its callback), sign-out (`undefined`, also on the sign-out callback), `refreshSession()`, `refetchUserInfo()`, and `getTokens()` when it refreshes. Notification happens right after the write, before `postCallback` runs.
 - **No notification** when nothing is written: `getTokens()` returning a stored token, a failed refresh, `processCallback()` with nothing pending.
 - **Scope:** only this client instance's writes in this tab. Other tabs sharing `LocalStorage`, and other client instances, don't notify it (listen for the window `storage` event on `mc.session.<clientId>[.<sessionKey>]` for cross-tab changes).

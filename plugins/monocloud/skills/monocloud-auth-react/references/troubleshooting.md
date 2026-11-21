@@ -12,9 +12,13 @@ Also `useClient() can only be used inside …` and `<ProcessCallback /> can only
 
 ## `isLoading` never becomes `false`, or `<ProcessCallback>` stays on `loading`
 
-**Cause:** a promise that never settles — bootstrap failures set `isLoading: false` and `error` instead. A custom `IStorage` whose `getItem` never resolves blocks the first session delivery; a custom `postCallback` that never resolves keeps `processCallback()`, and so `<ProcessCallback>`'s `loading`, pending (the client awaits it).
+**Cause:** something the first session delivery waits for never happens — bootstrap failures set `isLoading: false` and `error` instead.
 
-**Fix:** make every `IStorage` method resolve (`getItem` → `null` on a miss); let `postCallback` return after navigating.
+- On a redirect callback URL the first session waits for `processCallback()`. With `autoProcessCallback={false}`, that means `<ProcessCallback>` must render there — and not behind an `isLoading` gate, which deadlocks.
+- A custom `IStorage` whose `getItem` never resolves blocks the first delivery.
+- A custom `postCallback` that never resolves keeps `processCallback()`, and so `<ProcessCallback>`'s `loading`, pending (the client awaits it).
+
+**Fix:** render `<ProcessCallback>` unconditionally on every return route (or keep `autoProcessCallback` on); make every `IStorage` method resolve (`getItem` → `null` on a miss); let `postCallback` return after navigating.
 
 During a popup `signIn`, `isLoading` is `true` until the popup completes, is closed, or hits `authWindowTimeout` — render the page normally rather than a full-screen spinner if that matters.
 
@@ -30,9 +34,11 @@ if (isLoading) return null; // or a spinner
 if (!isAuthenticated) return <Navigate to="/" replace />;
 ```
 
+With `autoProcessCallback={false}`, keep the `<ProcessCallback>` route outside such a guard: on the callback URL, loading ends only after it has run.
+
 ## Callbacks never complete with `autoProcessCallback={false}`
 
-**Cause:** with automatic processing off, only `<ProcessCallback>` completes flows. A missing component, a route that doesn't render it at `callbackPath` / `signOutPath`, or a popup/silent flow landing on such a route all leave the flow unfinished (popups and silent sign-in end with `Window closed by user` or `Authentication window timed out`).
+**Cause:** with automatic processing off, only `<ProcessCallback>` completes flows. A missing component, a route that doesn't render it at `callbackPath` / `signOutPath`, or a popup/silent flow landing on such a route all leave the flow unfinished (popups and silent sign-in end with `Window closed by user` or `Authentication window timed out`; a redirect leaves `isLoading` stuck at `true` on the callback URL).
 
 **Fix:** render `<ProcessCallback>` on every path MonoCloud returns to (set `signOutPath` to the same route if convenient), and give the provider a `postCallback` that navigates away.
 

@@ -144,6 +144,12 @@ const { accessToken } = await client.getTokens({ resource: 'https://api.example.
 
 UserInfo 401/403 also raises `MonoCloudTokenError` (message `<error>: <description>`; `.code` `'insufficient_scope'` or `'invalid_token'`).
 
+## `onSessionChange()` never fires on the callback page
+
+**Cause:** the page is a redirect callback (`appUrl + callbackPath` / `signOutPath` with the pending flow's `state` in the URL) and `processCallback()` isn't called on that load. Listeners' first value waits for it there.
+
+**Fix:** call `client.processCallback()` unconditionally on every page load, including the callback route.
+
 ## UI doesn't update after a popup sign-in, refresh or sign-out
 
 **Cause:** the UI was rendered from a single `getSession()` read; nothing tells it about later writes. Or the change happened in another tab — `onSessionChange()` reports only this client instance's writes in this tab.

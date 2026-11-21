@@ -1,6 +1,6 @@
 # API surface — `@monocloud/backend-node/express`
 
-Verified against `@monocloud/backend-node@0.3.10` (`monocloud/auth-js` @ `30d7d98`).
+Verified against `@monocloud/backend-node@0.3.11` (`monocloud/auth-js` @ `3cfea90`).
 
 ## Entry points
 
@@ -9,7 +9,7 @@ Verified against `@monocloud/backend-node@0.3.10` (`monocloud/auth-js` @ `30d7d9
 | `@monocloud/backend-node/express` | `protectApi`; types `ProtectMiddleware`, `AuthenticatedExpressRequest`; the shared exports |
 | `@monocloud/backend-node` | The shared exports plus type `MtlsEndpointAliases` (root only); no `protectApi` |
 | `@monocloud/backend-node/fastify` | Fastify `protectApi`, `ProtectHook`, `AuthenticatedFastifyRequest`; the shared exports |
-| `@monocloud/backend-node/utils` | Re-export of `@monocloud/auth-core/utils`: `isUserInGroup(claims, groups, groupsClaim = 'groups', matchAll = false)`; the other helpers (`parseCallbackParams`, `generateState`, `generateNonce`, `generatePKCE`, `encrypt` / `decrypt`, `encryptSession` / `decryptSession`, `encryptAuthState` / `decryptAuthState`) serve sign-in flows |
+| `@monocloud/backend-node/utils` | Re-export of `@monocloud/auth-core/utils`: `isUserInGroup(claims, groups: string | string[], groupsClaim = 'groups', matchAll = false)` (a string is one group; `[]` passes everyone); the other helpers (`parseCallbackParams`, `generateState`, `generateNonce`, `generatePKCE`, `encrypt` / `decrypt`, `encryptSession` / `decryptSession`, `encryptAuthState` / `decryptAuthState`) serve sign-in flows |
 | `@monocloud/backend-node/internal` | Re-export of `@monocloud/auth-core/internal` — SDK internals, not for application code |
 
 **Shared exports.** Classes: `MonoCloudBackendNodeClient`, `MonoCloudOidcBackendClient`, `MonoCloudAuthBaseError`, `MonoCloudValidationError`, `MonoCloudTokenError`, `MonoCloudOPError`, `MonoCloudHttpError`. Types: `MonoCloudBackendNodeClientOptions`, `ValidateAccessTokenOptions`, `ProtectOptions`, `ProtectApiRequestOptions`, `TokenResolver`, `ClientCertificateResolver`, `IIntrospectionCache`, `AccessTokenClaims`, `JwtClaims`, `CertificateBindingValidation`, `ClientAuthMethod`, `MonoCloudTokenErrorCode`, `MonoCloudRawResponse`, `IntrospectOptions`, `ValidateJwtAccessTokenOptions`, `IsUserInGroupOptions`, `MonoCloudOidcBackendClientOptions`, `Jwk`, `Jwks`, `JwsHeaderParameters`, `IssuerMetadata`. Nothing else is exported (no error mapper, no bearer-token parser).

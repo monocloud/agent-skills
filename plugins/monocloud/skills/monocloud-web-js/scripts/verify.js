@@ -206,7 +206,7 @@ if (!files.length) {
 
   if (importers.length) {
     if (processCallbackFound) pass('processCallback() is called.');
-    else warn('No processCallback() call found — call `await client.processCallback()` on every page load (it completes returning sign-ins/sign-outs and is otherwise a no-op).');
+    else warn('No processCallback() call found — call `await client.processCallback()` on every page load (it completes returning sign-ins/sign-outs and is otherwise a no-op; on a callback URL, onSessionChange() listeners wait for it).');
   }
   if (secretFiles.length) warn(`clientSecret set in browser code (${list(secretFiles)}) — SPA clients are public; remove it and rely on PKCE.`);
   if (placeholderFiles.length) warn(`Placeholder values (<your-…>) still present in ${list(placeholderFiles)} — use your tenant domain and client ID.`);

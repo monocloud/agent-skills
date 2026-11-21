@@ -90,7 +90,7 @@ await fastify.listen({ port: 3000 });
 `protect(options?)` accepts only `ProtectOptions`:
 
 - `scopes?: string[]` — **all** required, matched against the space-separated `scope` claim (no `scp` fallback; the claim name is fixed).
-- `groups?: string[]` — **any one** by default, all when `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL=true`. Read from the `groups` claim (`MONOCLOUD_BACKEND_GROUPS_CLAIM`); entries may be strings or `{ id, name }` objects (either field matches).
+- `groups?: string[]` — **any one** by default, all when `MONOCLOUD_BACKEND_GROUPS_MATCH_ALL=true`. Read from the `groups` claim (`MONOCLOUD_BACKEND_GROUPS_CLAIM`); entries may be strings or `{ id, name }` objects (either field matches). In plain JS a bare string counts as one group.
 
 Empty arrays require nothing. There is no per-route certificate option: the binding mode is the client's `validateCertificateBinding` and the certificate comes from `certificateResolver`.
 
